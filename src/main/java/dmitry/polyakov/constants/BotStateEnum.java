@@ -3,7 +3,7 @@ package dmitry.polyakov.constants;
 /**
  * @author Dmitry Polyakov
  * @created 09.02.2023 11:32
- **/
+ */
 
 public enum BotStateEnum {
     DEFAULT_STATE,
@@ -12,6 +12,10 @@ public enum BotStateEnum {
     SHOW_WEATHER_IN_SETTLEMENT,
     SHOW_LANGUAGES,
     ASK_PHRASE,
+    ASK_DICTIONARY_OPTION,
+    SHOW_RUSSIAN_ENGLISH_SENTENCES,
+    SHOW_ENGLISH_SENTENCES,
+    SHOW_ENGLISH_MEANINGS,
     SHOW_WEATHER_GETTER_WAY,
     ASK_WHEREABOUTS;
 }

@@ -11,7 +11,7 @@ import java.util.ResourceBundle;
 /**
  * @author Dmitry Polyakov
  * @created 04.02.2023 16:05
- **/
+ */
 public class MenuCommands {
 
     public static List<BotCommand> addBotCommands() {
@@ -29,8 +29,8 @@ public class MenuCommands {
                 messages.getString("menu_help")));
         listOfCommands.add(new BotCommand("/weather",
                 messages.getString("menu_weather")));
-        listOfCommands.add(new BotCommand("/sentences",
-                messages.getString("menu_sentences")));
+        listOfCommands.add(new BotCommand("/dictionary",
+                messages.getString("menu_dictionary")));
         listOfCommands.add(new BotCommand("/settings",
                 messages.getString("menu_settings")));
         listOfCommands.add(new BotCommand("/language",

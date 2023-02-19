@@ -13,7 +13,7 @@ import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
 /**
  * @author Dmitry Polyakov
  * @created 11.01.2023 00:05
- **/
+ */
 @Slf4j
 @Component
 public class BotInitializer {
