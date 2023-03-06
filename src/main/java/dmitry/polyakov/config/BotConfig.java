@@ -1,5 +1,6 @@
 package dmitry.polyakov.config;
 
+import dmitry.polyakov.service.TelegramBot;
 import lombok.Data;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
@@ -27,5 +28,4 @@ public class BotConfig {
 
     @Value("${bot.token}")
     String token;
-
 }

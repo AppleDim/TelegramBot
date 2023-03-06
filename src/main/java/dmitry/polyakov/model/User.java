@@ -15,7 +15,7 @@ import java.sql.Timestamp;
 @Getter
 @Setter
 @Entity(name = "usersDataTable")
-@Table(name = "users")
+@Table(name = "tgbot")
 public class User {
 
     @Id
@@ -27,12 +27,15 @@ public class User {
 
     private Timestamp registeredTime;
 
+    private String locationCoordinates;
+
     @Override
     public String toString() {
         return "User{" +
                 "chatId=" + chatId +
                 ", firstName='" + firstName + '\'' +
                 ", userName='" + userName + '\'' +
+                ", locationCoordinates='" + locationCoordinates + '\'' +
                 ", registeredTime=" + registeredTime +
                 '}';
     }
