@@ -13,4 +13,5 @@ public class LanguageLocalisation {
     public static ResourceBundle defaultMessages = ResourceBundle.getBundle("messages", Locale.of("ru"));
     public static final String russianLang = EmojiParser.parseToUnicode("Русский:ru:");
     public static final String englishLang = EmojiParser.parseToUnicode("English:gb:");
+
 }
