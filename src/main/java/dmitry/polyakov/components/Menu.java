@@ -1,13 +1,12 @@
 package dmitry.polyakov.components;
 
-import dmitry.polyakov.service.TelegramBot;
 import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.ResourceBundle;
 
 import static dmitry.polyakov.constants.BotMenuCommand.*;
+import static dmitry.polyakov.service.LanguageLocalisation.messages;
 
 /**
  * @author Dmitry Polyakov
@@ -17,8 +16,6 @@ public class Menu {
 
     public static List<BotCommand> addBotCommands() {
         List<BotCommand> listOfCommands = new ArrayList<>();
-
-        ResourceBundle messages = TelegramBot.messages;
 
         listOfCommands.add(new BotCommand(START,
                 messages.getString("menu_start")));

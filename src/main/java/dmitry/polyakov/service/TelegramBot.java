@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.ActionType;
 import org.telegram.telegrambots.meta.api.methods.BotApiMethod;
+import org.telegram.telegrambots.meta.api.methods.ParseMode;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
 import org.telegram.telegrambots.meta.api.methods.send.SendChatAction;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
@@ -38,11 +39,13 @@ import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import java.io.IOException;
 import java.sql.Timestamp;
 import java.util.*;
+import java.util.regex.Pattern;
 
 import static dmitry.polyakov.constants.BotMenuCommand.*;
 import static dmitry.polyakov.constants.BotStateEnum.*;
 import static dmitry.polyakov.model.UserUnit.userIdSet;
 import static dmitry.polyakov.model.UserUnit.userList;
+import static dmitry.polyakov.service.LanguageLocalisation.messages;
 
 /**
  * @author Dmitry Polyakov
@@ -53,7 +56,6 @@ import static dmitry.polyakov.model.UserUnit.userList;
 public class TelegramBot extends TelegramLongPollingBot {
     private final BotConfig config;
     private UserRepository userRepository;
-    public static ResourceBundle messages = LanguageLocalisation.defaultMessages;
     private static Map<Long, BotStateEnum> usersState = new HashMap<>();
 
     @Autowired
@@ -137,10 +139,10 @@ public class TelegramBot extends TelegramLongPollingBot {
             } else if (messageText.equals(WEATHER)
                     || messageText.equals(EmojiParser.parseToUnicode(messages
                     .getString("weather_button") + ":thunder_cloud_rain:"))) {
-                for (UserUnit UserUnit : userList) {
-                    if (UserUnit.getChatId() == chatId) {
-                        UserUnit.line = 0;
-                        UserUnit.page = 1;
+                for (UserUnit userUnit : userList) {
+                    if (userUnit.getChatId() == chatId) {
+                        userUnit.line = 0;
+                        userUnit.page = 1;
                     }
                 }
                 displayWeatherMenu(chatId);
@@ -177,9 +179,9 @@ public class TelegramBot extends TelegramLongPollingBot {
                 log.info(update.getMessage().getText() + " command executed by @"
                         + update.getMessage().getChat().getUserName());
             } else if (isUserMatchedByIdAndBotState(chatId, ASK_PHRASE)) {
-                for (UserUnit UserUnit : userList) {
-                    if (UserUnit.getChatId() == chatId) {
-                        UserUnit.words = update.getMessage().getText();
+                for (UserUnit userUnit : userList) {
+                    if (userUnit.getChatId() == chatId) {
+                        userUnit.words = update.getMessage().getText();
                     }
                 }
                 usersState.replace(chatId, ASK_DICTIONARY_OPTION);
@@ -187,27 +189,27 @@ public class TelegramBot extends TelegramLongPollingBot {
             } else if (messageText.equals(EmojiParser.parseToUnicode("2. English meanings" + ":clipboard:" + ":gb:"))
                     && isUserMatchedByIdAndBotState(chatId, ASK_DICTIONARY_OPTION)) {
                 displayMeaningsOfWord(chatId);
-                for (UserUnit UserUnit : userList) {
-                    if (UserUnit.getChatId() == chatId) {
-                        UserUnit.words = null;
+                for (UserUnit userUnit : userList) {
+                    if (userUnit.getChatId() == chatId) {
+                        userUnit.words = null;
                     }
                 }
                 usersState.replace(chatId, DEFAULT_STATE);
             } else if (messageText.equals(EmojiParser.parseToUnicode("3. Russian-english sentences" + ":gb:" + ":ru:"))
                     && isUserMatchedByIdAndBotState(chatId, ASK_DICTIONARY_OPTION)) {
                 displayRusEngSentences(chatId);
-                for (UserUnit UserUnit : userList) {
-                    if (UserUnit.getChatId() == chatId) {
-                        UserUnit.words = null;
+                for (UserUnit userUnit : userList) {
+                    if (userUnit.getChatId() == chatId) {
+                        userUnit.words = null;
                     }
                 }
                 usersState.replace(chatId, DEFAULT_STATE);
             } else if (messageText.equals(EmojiParser.parseToUnicode("4. English sentences" + ":abc:" + ":gb:"))
                     && isUserMatchedByIdAndBotState(chatId, ASK_DICTIONARY_OPTION)) {
                 displayExamplesWithSentences(chatId);
-                for (UserUnit UserUnit : userList) {
-                    if (UserUnit.getChatId() == chatId) {
-                        UserUnit.words = null;
+                for (UserUnit userUnit : userList) {
+                    if (userUnit.getChatId() == chatId) {
+                        userUnit.words = null;
                     }
                 }
                 usersState.replace(chatId, DEFAULT_STATE);
@@ -239,20 +241,23 @@ public class TelegramBot extends TelegramLongPollingBot {
                     executeEditMessage(messageId, chatId, noPressed);
                 }
                 case "BACK_BUTTON" -> {
-                    for (UserUnit UserUnit : userList) {
-                        if (UserUnit.getChatId() == chatId) {
-                            if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST) && UserUnit.line != 0) {
-                                UserUnit.line = UserUnit.line - 10;
+                    for (UserUnit userUnit : userList) {
+                        if (userUnit.getChatId() == chatId) {
+                            if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST) && userUnit.line != 0) {
+                                userUnit.line = userUnit.line - 10;
                                 deleteMessage(messageId, chatId);
-                                --UserUnit.page;
+                                --userUnit.page;
                                 getRegion(chatId);
-                            } else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST) && UserUnit.line != 0) {
-                                UserUnit.line = UserUnit.line - 10;
+                            } else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST) && userUnit.line != 0) {
+                                userUnit.line = userUnit.line - 10;
                                 deleteMessage(messageId, chatId);
-                                --UserUnit.page;
+                                --userUnit.page;
                                 getSettlement(chatId);
+                            } else if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_IN_SETTLEMENT) && userUnit.page > 0) {
+                                deleteMessage(messageId, chatId);
+                                --userUnit.page;
                             } else {
-                                UserUnit.line = 0;
+                                userUnit.line = 0;
                                 deleteMessage(messageId, chatId);
                                 if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) getRegion(chatId);
                                 else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST))
@@ -263,24 +268,27 @@ public class TelegramBot extends TelegramLongPollingBot {
                 }
                 case "CANCEL_BUTTON" -> {
                     usersState.replace(chatId, DEFAULT_STATE);
-                    executeEditMessage(messageId, chatId, messages.getString("click_button"));
-                    sendMessage(chatId, "Main menu");
+                    deleteMessage(messageId, chatId);
+                    sendMessage(chatId, messages.getString("click_button"));
                 }
                 case "FORWARD_BUTTON" -> {
-                    for (UserUnit UserUnit : userList) {
-                        if (UserUnit.getChatId() == chatId) {
+                    for (UserUnit userUnit : userList) {
+                        if (userUnit.getChatId() == chatId) {
                             if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)
-                                    && UserUnit.page < countLines(chatId) / 10 + 1) {
-                                UserUnit.line = UserUnit.line + 10;
+                                    && userUnit.page < countLines(chatId) / 10 + 1) {
+                                userUnit.line = userUnit.line + 10;
                                 deleteMessage(messageId, chatId);
-                                ++UserUnit.page;
+                                ++userUnit.page;
                                 getRegion(chatId);
                             } else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST)
-                                    && UserUnit.page < countLines(chatId) / 10 + 1) {
-                                UserUnit.line = UserUnit.line + 10;
+                                    && userUnit.page < countLines(chatId) / 10 + 1) {
+                                userUnit.line = userUnit.line + 10;
                                 deleteMessage(messageId, chatId);
-                                ++UserUnit.page;
+                                ++userUnit.page;
                                 getSettlement(chatId);
+                            } else if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_IN_SETTLEMENT) && userUnit.page <= 10) {
+                                deleteMessage(messageId, chatId);
+                                ++userUnit.page;
                             } else {
                                 deleteMessage(messageId, chatId);
                                 if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) getRegion(chatId);
@@ -292,16 +300,16 @@ public class TelegramBot extends TelegramLongPollingBot {
                 }
             }
             if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) {
-                for (UserUnit UserUnit : userList) {
-                    if (UserUnit.getChatId() == chatId) {
-                        for (Map.Entry<String, String> entry : UserUnit.regions.entrySet()) {
+                for (UserUnit userUnit : userList) {
+                    if (userUnit.getChatId() == chatId) {
+                        for (Map.Entry<String, String> entry : userUnit.regions.entrySet()) {
                             if (entry.getKey().equals(callBackData)) {
                                 executeEditMessage(messageId, chatId, messages.getString("region_chosen") + " "
                                         + callBackData);
-                                UserUnit.region = callBackData;
+                                userUnit.region = callBackData;
                                 usersState.replace(chatId, SHOW_SETTLEMENT_LIST);
-                                UserUnit.page = 1;
-                                UserUnit.line = 0;
+                                userUnit.page = 1;
+                                userUnit.line = 0;
                                 break;
                             }
                         }
@@ -310,16 +318,16 @@ public class TelegramBot extends TelegramLongPollingBot {
                 getSettlement(chatId);
             }
             if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST)) {
-                for (UserUnit UserUnit : userList) {
-                    if (UserUnit.getChatId() == chatId) {
-                        for (Map.Entry<String, String> entry : UserUnit.settlements.entrySet()) {
+                for (UserUnit userUnit : userList) {
+                    if (userUnit.getChatId() == chatId) {
+                        for (Map.Entry<String, String> entry : userUnit.settlements.entrySet()) {
                             if (entry.getKey().equals(callBackData)) {
-                                UserUnit.settlement = callBackData;
+                                userUnit.settlement = callBackData;
                                 executeEditMessage(messageId, chatId, messages.getString("settlement_chosen")
                                         + callBackData);
                                 usersState.replace(chatId, SHOW_WEATHER_IN_SETTLEMENT);
-                                UserUnit.page = 1;
-                                UserUnit.line = 0;
+                                userUnit.page = 1;
+                                userUnit.line = 0;
                                 break;
                             }
                         }
@@ -327,8 +335,15 @@ public class TelegramBot extends TelegramLongPollingBot {
                 }
             }
             if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_IN_SETTLEMENT)) {
-                getWeatherFromSettlement(chatId);
-                usersState.replace(chatId, DEFAULT_STATE);
+                for (UserUnit userUnit : userList) {
+                    if (userUnit.getChatId() == chatId) {
+                        getWeatherFromSettlement(chatId);
+                        if (userRepository.findById(userUnit.getChatId()).isPresent()) {
+                            log.info("@" + userRepository.findById(userUnit.getChatId()).get().getUserName() + " received weather in "
+                                    + userUnit.settlement + " for day " + userUnit.page);
+                        }
+                    }
+                }
             }
         }
     }
@@ -386,13 +401,14 @@ public class TelegramBot extends TelegramLongPollingBot {
         keyboardMarkup.setKeyboard(keyboardRows);
         sendMessage.setReplyMarkup(keyboardMarkup);
         tryToExecuteMessage(sendMessage);
+
     }
 
     private void displayMeaningsOfWord(long chatId) {
-        for (UserUnit UserUnit : userList) {
-            if (UserUnit.getChatId() == chatId) {
+        for (UserUnit userUnit : userList) {
+            if (userUnit.getChatId() == chatId) {
                 try {
-                    Document doc = Jsoup.connect("https://dictionary.cambridge.org/dictionary/english/" + UserUnit.words).get();
+                    Document doc = Jsoup.connect("https://dictionary.cambridge.org/dictionary/english/" + userUnit.words).get();
                     Elements elements = doc.getElementsByClass("sense-body dsense_b");
                     for (Element element : elements) {
                         sendMessage(chatId, element.getElementsByClass("def ddef_d db")
@@ -400,7 +416,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                     }
                 } catch (IOException e) {
                     sendMessage(chatId, "Word or phrase hasn't been found.");
-                    UserUnit.words = null;
+                    userUnit.words = null;
                     usersState.replace(chatId, DEFAULT_STATE);
                     log.warn("Error occurred while attempting this command: ", e);
                 }
@@ -409,10 +425,10 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private void displayRusEngSentences(long chatId) {
-        for (UserUnit UserUnit : userList) {
-            if (UserUnit.getChatId() == chatId) {
+        for (UserUnit userUnit : userList) {
+            if (userUnit.getChatId() == chatId) {
                 try {
-                    String url = "https://context.reverso.net/перевод/английский-русский/" + UserUnit.words;
+                    String url = "https://context.reverso.net/перевод/английский-русский/" + userUnit.words;
                     Document doc = Jsoup.connect(url).get();
                     Elements elements = doc.body().getElementsByClass("example");
                     for (Element element : elements) {
@@ -421,7 +437,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                     }
                 } catch (IOException e) {
                     sendMessage(chatId, "Word or phrase hasn't been found.");
-                    UserUnit.words = null;
+                    userUnit.words = null;
                     usersState.replace(chatId, DEFAULT_STATE);
                     log.warn("Error occurred while attempting this command: ", e);
                 }
@@ -430,17 +446,17 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private void displayExamplesWithSentences(long chatId) {
-        for (UserUnit UserUnit : userList) {
-            if (UserUnit.getChatId() == chatId) {
+        for (UserUnit userUnit : userList) {
+            if (userUnit.getChatId() == chatId) {
                 try {
-                    Document doc = Jsoup.connect("https://dictionary.cambridge.org/dictionary/english/" + UserUnit.words).get();
+                    Document doc = Jsoup.connect("https://dictionary.cambridge.org/dictionary/english/" + userUnit.words).get();
                     Elements elements3 = doc.body().getElementsByClass("lbb lb-cm lpt-10");
                     for (Element element : elements3) {
                         sendMessage(chatId, element.getElementsByClass("deg").text());
                     }
                 } catch (IOException e) {
                     sendMessage(chatId, "Word or phrase hasn't been found.");
-                    UserUnit.words = null;
+                    userUnit.words = null;
                     usersState.replace(chatId, DEFAULT_STATE);
                     log.warn("Error occurred while attempting this command: ", e);
                 }
@@ -604,8 +620,8 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private int countLines(long chatId) {
-        for (UserUnit UserUnit : userList) {
-            if (UserUnit.getChatId() == chatId) {
+        for (UserUnit userUnit : userList) {
+            if (userUnit.getChatId() == chatId) {
                 int numOfLines = 0;
                 if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) {
                     Document doc = connectToUrl("https://world-weather.ru/pogoda/russia", chatId);
@@ -618,7 +634,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                     }
                     return numOfLines;
                 } else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST)) {
-                    Document doc = extractCallbackDataUrlFromElements(UserUnit.regions, UserUnit.region, chatId);
+                    Document doc = extractCallbackDataUrlFromElements(userUnit.regions, userUnit.region, chatId);
                     Elements links = doc.select("a[href]");
                     for (Element element : links) {
                         if (element.attr("href").contains("/pogoda")
@@ -635,33 +651,33 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private void getRegion(Long chatId) {
-        for (UserUnit UserUnit : userList) {
-            if (UserUnit.getChatId() == chatId) {
+        for (UserUnit userUnit : userList) {
+            if (userUnit.getChatId() == chatId) {
                 SendMessage sendMessage = new SendMessage();
                 sendMessage.setChatId(String.valueOf(chatId));
-                sendMessage.setText(messages.getString("region_list") + UserUnit.page + "/" + (countLines(chatId) / 10 + 1) + ": ");
+                sendMessage.setText(messages.getString("region_list") + userUnit.page + "/" + (countLines(chatId) / 10 + 1) + ": ");
 
                 Document doc = connectToUrl("https://world-weather.ru/pogoda/russia", chatId);
                 Elements links = doc.select("a[href]");
 
                 if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) {
-                    UserUnit.regions = new TreeMap<>();
+                    userUnit.regions = new TreeMap<>();
                     InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
                     List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
                     int j = 0;
-                    for (int i = UserUnit.line; j < 10; i++) {
+                    for (int i = userUnit.line; j < 10; i++) {
                         try {
                             if (links.get(i).attr("href").contains("/pogoda")
                                     && !links.get(i).text().equals("Весь мир")) {
                                 j++;
-                                UserUnit.regions.put(links.get(i).text(), links.get(i).attr("href"));
+                                userUnit.regions.put(links.get(i).text(), links.get(i).attr("href"));
                             }
                         } catch (IndexOutOfBoundsException e) {
                             break;
                         }
                     }
                     int i = 0;
-                    for (Map.Entry<String, String> regionEntry : UserUnit.regions.entrySet()) {
+                    for (Map.Entry<String, String> regionEntry : userUnit.regions.entrySet()) {
                         inlineKeyboardCreate(rowsInline, ++i, regionEntry.getKey());
                     }
                     putGeneralButtons(rowsInline);
@@ -674,34 +690,34 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private void getSettlement(Long chatId) {
-        for (UserUnit UserUnit : userList) {
-            if (UserUnit.getChatId() == chatId) {
+        for (UserUnit userUnit : userList) {
+            if (userUnit.getChatId() == chatId) {
                 if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST)) {
-                    UserUnit.settlements = new TreeMap<>();
+                    userUnit.settlements = new TreeMap<>();
                     SendMessage sendMessage = new SendMessage();
                     sendMessage.setChatId(String.valueOf(chatId));
-                    sendMessage.setText(messages.getString("settlement_list") + UserUnit.page + "/" + (countLines(chatId) / 10 + 1) + ": ");
-                    Document doc = extractCallbackDataUrlFromElements(UserUnit.regions, UserUnit.region, chatId);
+                    sendMessage.setText(messages.getString("settlement_list") + userUnit.page + "/" + (countLines(chatId) / 10 + 1) + ": ");
+                    Document doc = extractCallbackDataUrlFromElements(userUnit.regions, userUnit.region, chatId);
 
                     Elements links = doc.select("a[href]");
                     InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
                     List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
 
                     int j = 0;
-                    for (int i = UserUnit.line; j < 10; i++) {
+                    for (int i = userUnit.line; j < 10; i++) {
                         try {
                             if (links.get(i).attr("href").contains("/pogoda")
                                     && !links.get(i).text().equals("Весь мир")
                                     && !links.get(i).text().equals("Россия")) {
                                 j++;
-                                UserUnit.settlements.put(links.get(i).text(), "http:" + links.get(i).attr("href"));
+                                userUnit.settlements.put(links.get(i).text(), "http:" + links.get(i).attr("href") + "10days");
                             }
                         } catch (IndexOutOfBoundsException e) {
                             break;
                         }
                     }
                     int i = 0;
-                    for (Map.Entry<String, String> settlementEntry : UserUnit.settlements.entrySet()) {
+                    for (Map.Entry<String, String> settlementEntry : userUnit.settlements.entrySet()) {
                         inlineKeyboardCreate(rowsInline, ++i, settlementEntry.getKey());
                     }
                     putGeneralButtons(rowsInline);
@@ -744,46 +760,109 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private void getWeatherFromSettlement(long chatId) {
-        for (UserUnit UserUnit : userList) {
-            if (UserUnit.getChatId() == chatId) {
-                Document doc = extractCallbackDataUrlFromElements(UserUnit.settlements, UserUnit.settlement, chatId);
-                Elements elements = doc.getElementsByClass("weather-now");
-
-                String str1 = "";
-                String str2 = "";
+        for (UserUnit userUnit : userList) {
+            if (userUnit.getChatId() == chatId) {
+                Document doc = extractCallbackDataUrlFromElements(userUnit.settlements, userUnit.settlement, chatId);
+                Elements elements = doc.body().getElementsByClass("weather-short");
+                Elements sunRisesElems = doc.body().getElementsByClass("sun-box");
+                String elements1 = doc.getElementsByClass("weather-temperature").outerHtml();
+                String[] weather = elements1.replace("<td class=\"weather-temperature\">", "").split("\n");
+                String elements2 = doc.getElementsByClass("weather-wind").outerHtml();
+                String[] wind = elements2.split("\n");
+                int i = 0;
+                int j = 0;
+                int m = 0;
+                SendMessage sendMessage = new SendMessage();
+                sendMessage.setChatId(String.valueOf(chatId));
+                userUnit.days = new ArrayList<>();
                 for (Element element : elements) {
-                    str2 = String.valueOf(element.getElementsByClass("tooltip"));
-                    str1 = String.valueOf(element.getElementsByClass("weather-now-info"));
+                    userUnit.days.add(EmojiParser.parseToUnicode(":calendar:")
+                            + (element.getElementsByClass("dates short-d").hasText()
+                            ? ("*" + element.getElementsByClass("dates short-d").text() + "*" + " \n")
+                            : ("*" + element.getElementsByClass("dates short-d red").text()) + "*" + " \n")
+                            + "---------------------------------" + "\n"
+                            + parseWeatherStrings(element, weather, 1 + 2 * j++, "night", wind, m++) + "\n"
+                            + parseWeatherStrings(element, weather, 1 + 2 * j++, "morning", wind, m++) + "\n"
+                            + parseWeatherStrings(element, weather, 1 + 2 * j++, "day", wind, m++) + "\n"
+                            + parseWeatherStrings(element, weather, 1 + 2 * j++, "evening", wind, m++) + "\n"
+                            + EmojiParser.parseToUnicode(":sunrise:")
+                            + "Восход: " + sunRisesElems.get(i).text().split(" ")[0] + "\n"
+                            + EmojiParser.parseToUnicode(":sunrise_over_mountains:")
+                            + " Закат: " + sunRisesElems.get(i).text().split(" ")[1]);
                 }
-
-                StringBuilder sb = new StringBuilder();
-
-                String[] arr = str1.split("\n");
-                sb
-                        .append(arr[7].split("\"")[3])
-                        .append(arr[7].split("\"")[4]
-                                .replace("></em><b>", ": ")
-                                .replace("</b></p>", ""))
-                        .append("\nТемпература сейчас:")
-                        .append(arr[9].replace("<span>", "")
-                                .replace("</span>", "\n")
-                                .replaceFirst(" ", ""));
-
-                String[] arr2 = str2.split("\n");
-                sb
-                        .append(arr2[1]
-                                .split("\"")[1])
-                        .append("\n")
-                        .append("Ветер: ")
-                        .append(arr2[3]
-                                .split("\"")[1])
-                        .append(", ")
-                        .append(arr2[4]
-                                .split("\"")[1]);
-
-                sendMessage(chatId, sb.toString());
+                sendMessage.setParseMode(ParseMode.MARKDOWN);
+                if (userUnit.page < 1) userUnit.page = 1;
+                if (userUnit.page > 10) userUnit.page = 10;
+                sendMessage.setText(userUnit.days.get(userUnit.page - 1));
+                InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
+                List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
+                putGeneralButtons(rowsInline);
+                markupInline.setKeyboard(rowsInline);
+                sendMessage.setReplyMarkup(markupInline);
+                tryToExecuteMessage(sendMessage);
             }
         }
+    }
+
+    public static String parseWeatherStrings(Element element, String[] weather, int j, String elementByClass, String[] wind, int m) {
+        String[] params = element.getElementsByClass(elementByClass).text().split(" ");
+        return addEmojiToDaytime(params[0]) + "\n"
+                + addEmojiToWeatherString(weather, j) + "\n"
+                + EmojiParser.parseToUnicode(":thermometer:") + "_Температура:_ " + params[1] + "С" + "\n"
+                + "☂_Вероятность осадков:_ " + params[3] + "\n"
+                + EmojiParser.parseToUnicode(":compass: ") + "_Давление:_ " + params[4] + " мм.рт.ст.\n"
+                + EmojiParser.parseToUnicode(":cyclone:") + "_Скорость ветра:_ " + params[5] + " м/c\n"
+                + EmojiParser.parseToUnicode(":wavy_dash:") + "_Направление ветра:_ " + replaceWindDirectionWithEmoji(wind, m) + "\n"
+                + EmojiParser.parseToUnicode(":droplet:") + "_Влажность воздуха:_ " + params[6] + "\n";
+    }
+
+    public static String addEmojiToDaytime(String str) {
+        return switch (str) {
+            case "Ночь" -> EmojiParser.parseToUnicode(":new_moon_with_face: *Ночь*");
+            case "Утро" -> EmojiParser.parseToUnicode(":sunrise: *Утро*");
+            case "День" -> EmojiParser.parseToUnicode(":sun_with_face: *День*");
+            case "Вечер" -> EmojiParser.parseToUnicode(":night_with_stars: *Вечер*");
+            default -> "";
+        };
+    }
+
+    public static String addEmojiToWeatherString(String[] weather, int j) {
+        String str = "";
+        switch (weather[j].split("\"")[3]) {
+            case "Преимущественно облачно" ->
+                    str = EmojiParser.parseToUnicode(":white_sun_behind_cloud: _Преимущественно облачно_");
+            case "Частично облачно" -> str = EmojiParser.parseToUnicode(":white_sun_small_cloud: _Частично облачно_");
+            case "Незначительная облачность" ->
+                    str = EmojiParser.parseToUnicode(":white_sun_small_cloud: _Незначительная облачность_");
+            case "Пасмурно" -> str = EmojiParser.parseToUnicode(":cloud: _Пасмурно_");
+            case "Ясно" -> str = EmojiParser.parseToUnicode(":high_brightness: _Ясно_");
+            case "Кратковременные осадки" -> str = EmojiParser.parseToUnicode(":cloud_rain: _Кратковременные осадки_");
+            case "Слабый дождь" -> str = EmojiParser.parseToUnicode(":white_sun_behind_cloud_rain: _Слабый дождь_");
+            case "Местами сильный дождь" -> str = EmojiParser.parseToUnicode(":white_sun_behind_cloud_rain: _Дождь_");
+            case "Облачно и слабый снег" -> str = EmojiParser.parseToUnicode(":cloud_snow: _Слабый снег_");
+            case "Сильный снег" -> str = EmojiParser.parseToUnicode(":cloud_snow: _Сильный снегопад_");
+            case "Снег" -> str = EmojiParser.parseToUnicode(":cloud_snow: _Снег_");
+            case "Сильный дождь" -> str = EmojiParser.parseToUnicode(":cloud_rain: _Ливень_");
+            case "Сильный дождь, гроза" -> str = EmojiParser.parseToUnicode(":thunder_cloud_rain: _Ливень с грозой_");
+            case "Дождь с грозой" -> str = EmojiParser.parseToUnicode(":thunder_cloud_rain: _Дождь с грозой_");
+            case "Дождь" -> str = EmojiParser.parseToUnicode(":cloud_rain: _Дождь_");
+        }
+        return str;
+    }
+
+    public static String replaceWindDirectionWithEmoji(String[] wind, int m) {
+        String str = "";
+        switch (wind[m].split("\"")[5]) {
+            case "восточный" -> str = EmojiParser.parseToUnicode(":arrow_right:");
+            case "юго-восточный" -> str = EmojiParser.parseToUnicode(":arrow_lower_right:");
+            case "южный" -> str = EmojiParser.parseToUnicode(":arrow_down:");
+            case "юго-западный" -> str = EmojiParser.parseToUnicode(":arrow_lower_left:");
+            case "западный" -> str = EmojiParser.parseToUnicode(":arrow_left:");
+            case "северо-западный" -> str = EmojiParser.parseToUnicode(":arrow_upper_left:");
+            case "северный" -> str = EmojiParser.parseToUnicode(":arrow_up:");
+            case "северо-восточный" -> str = EmojiParser.parseToUnicode(":arrow_upper_right:");
+        }
+        return str;
     }
 
     private void changeLanguageKeyboardDisplay(long chatId) {
@@ -867,8 +946,8 @@ public class TelegramBot extends TelegramLongPollingBot {
         usersState.putIfAbsent(chatId, DEFAULT_STATE);
         for (Map.Entry<Long, BotStateEnum> entry : usersState.entrySet()) {
             if (!userIdSet.contains(entry.getKey())) {
-                UserUnit UserUnit = new UserUnit(entry.getKey());
-                userList.add(UserUnit);
+                UserUnit userUnit = new UserUnit(entry.getKey());
+                userList.add(userUnit);
                 userIdSet.add(entry.getKey());
             }
         }
@@ -880,6 +959,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         SendMessage sendMessage = new SendMessage();
         sendMessage.setChatId(String.valueOf(chatId));
         sendMessage.setText(textToSend);
+        sendMessage.setParseMode(ParseMode.MARKDOWN);
 
         ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup();
         modifyKeyboardSettings(keyboardMarkup);
@@ -898,7 +978,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         row.add(sentencesButton);
 
         keyboardRows.add(row);
-        
+
         keyboardMarkup.setKeyboard(keyboardRows);
 
         sendMessage.setReplyMarkup(keyboardMarkup);

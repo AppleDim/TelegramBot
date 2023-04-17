@@ -9,6 +9,7 @@ public class UserUnit {
     private long chatId;
     public Map<String, String> regions;
     public Map<String, String> settlements;
+    public List<String> days;
     public String words;
     public String region;
     public String settlement;
