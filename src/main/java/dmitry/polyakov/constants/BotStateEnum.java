@@ -14,6 +14,5 @@ public enum BotStateEnum {
     ASK_PHRASE,
     ASK_DICTIONARY_OPTION,
     SHOW_WEATHER_GETTER_WAY,
-    ASK_WHEREABOUTS
 }
 

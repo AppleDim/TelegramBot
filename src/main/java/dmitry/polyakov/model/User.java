@@ -4,15 +4,11 @@ import dmitry.polyakov.constants.BotStateEnum;
 import lombok.Getter;
 import lombok.Setter;
 
-import javax.persistence.Entity;
-import javax.persistence.Id;
-import javax.persistence.Table;
-import javax.persistence.Transient;
+import javax.persistence.*;
+import javax.transaction.Transactional;
 import java.sql.Timestamp;
-import java.util.HashMap;
-import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * @author Dmitry Polyakov
@@ -20,6 +16,7 @@ import java.util.Set;
  */
 @Getter
 @Setter
+@Transactional
 @Entity(name = "usersDataTable")
 @Table(name = "tgbot")
 public class User {
@@ -34,28 +31,33 @@ public class User {
     private Timestamp registeredTime;
 
     private String locationCoordinates;
+    @Enumerated(EnumType.ORDINAL)
+    @Column(name = "BotStates")
+    private BotStateEnum userBotState;
 
-    @Transient
+    public void setUserBotState(BotStateEnum userBotState) {
+        this.userBotState = userBotState;
+    }
+
+    @ElementCollection(fetch = FetchType.EAGER)
     public Map<String, String> regions;
-    @Transient
-    public Map<String, String> settlements;
-    @Transient
-    public String words;
-    @Transient
-    public String region;
-    @Transient
-    public String settlement;
-    @Transient
-    public double longitude;
-    @Transient
-    public double latitude;
-    @Transient
-    public int line = 0;
-    @Transient
-    public int page = 1;
-    @Transient
-    public static Map<Long, BotStateEnum> usersState = new HashMap<>();
 
+    @ElementCollection(fetch = FetchType.EAGER)
+    public Map<String, String> settlements;
+
+    @ElementCollection
+    @Column(name = "days", length = 2048)
+    public List<String> days;
+
+    public String words;
+
+    public String region;
+
+    public String settlement;
+
+    public int line = 0;
+
+    public int page = 1;
 
     @Override
     public String toString() {

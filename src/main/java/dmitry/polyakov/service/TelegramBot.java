@@ -4,9 +4,7 @@ import com.vdurmont.emoji.EmojiParser;
 import dmitry.polyakov.components.Menu;
 import dmitry.polyakov.config.BotConfig;
 import dmitry.polyakov.constants.BotStateEnum;
-import dmitry.polyakov.model.User;
-import dmitry.polyakov.model.UserUnit;
-import dmitry.polyakov.model.UserRepository;
+import dmitry.polyakov.model.*;
 import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.jsoup.helper.ValidationException;
@@ -14,6 +12,7 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.ActionType;
@@ -39,12 +38,9 @@ import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import java.io.IOException;
 import java.sql.Timestamp;
 import java.util.*;
-import java.util.regex.Pattern;
 
 import static dmitry.polyakov.constants.BotMenuCommand.*;
 import static dmitry.polyakov.constants.BotStateEnum.*;
-import static dmitry.polyakov.model.UserUnit.userIdSet;
-import static dmitry.polyakov.model.UserUnit.userList;
 import static dmitry.polyakov.service.LanguageLocalisation.messages;
 
 /**
@@ -56,7 +52,12 @@ import static dmitry.polyakov.service.LanguageLocalisation.messages;
 public class TelegramBot extends TelegramLongPollingBot {
     private final BotConfig config;
     private UserRepository userRepository;
-    private static Map<Long, BotStateEnum> usersState = new HashMap<>();
+    private ScheduleRepository scheduleRepository;
+
+    @Autowired
+    public void setScheduleRepository(ScheduleRepository scheduleRepository) {
+        this.scheduleRepository = scheduleRepository;
+    }
 
     @Autowired
     public void setUserRepository(UserRepository userRepository) {
@@ -77,6 +78,26 @@ public class TelegramBot extends TelegramLongPollingBot {
         return config.getToken();
     }
 
+    private boolean isUserMatchedByIdAndBotState(long chatId, BotStateEnum botState) {
+        User user = getUser(chatId);
+        return user.getUserBotState() == botState;
+    }
+
+    private Optional<User> findUser(long chatId) {
+        return userRepository.findById(chatId);
+    }
+
+    public User getUser(long chatId) {
+        Optional<User> optionalUser = findUser(chatId);
+        if (optionalUser.isPresent()) {
+            return optionalUser.get();
+        } else {
+            log.warn("User not found for chatId: " + chatId);
+            return null;
+        }
+    }
+
+
     @Override
     public void onUpdateReceived(Update update) {
         try {
@@ -85,134 +106,140 @@ public class TelegramBot extends TelegramLongPollingBot {
         } catch (TelegramApiException e) {
             log.error("Error occurred while attempting this command: ", e);
         }
-        if (update.hasMessage() && update.getMessage().hasLocation()) {
-            long chatId = update.getMessage().getChatId();
-            Location location = update.getMessage().getLocation();
-            double longitude = location.getLongitude();
-            double latitude = location.getLatitude();
-            if (userRepository.findById(chatId).isPresent()) {
-                User user = userRepository.findById(chatId).get();
-                user.setLocationCoordinates(String.format("%s, %s", longitude, latitude));
-                userRepository.save(user);
-                log.info("User's location updated: " + user);
-            }
-            getWeatherFromLocation(chatId, longitude, latitude);
-            usersState.replace(chatId, DEFAULT_STATE);
-            log.info("User @" + update.getMessage().getChat().getUserName() + " sent his location");
 
+
+        if (update.hasMessage() && update.getMessage().hasLocation()) {
+            onUpdateLocationReceived(update);
         }
+
         if (update.hasMessage() && update.getMessage().hasText()) {
             String messageText = update.getMessage().getText();
             long chatId = update.getMessage().getChatId();
-            try {
-                executeTyping(chatId);
-                Thread.sleep(500);
-            } catch (InterruptedException e) {
-                log.warn("Error occurred while attempting this command: ", e);
-            }
+            executeBotTypingProcess(chatId);
+            User user = getUser(chatId);
+
             if (messageText.equals(START)) {
                 registerUser(update.getMessage());
                 startCommandReceived(chatId, update.getMessage().getChat().getUserName());
                 sendMessage(chatId, messages.getString("click_button"));
-                log.info(update.getMessage().getText() + " command executed by @"
+                log.info(update.getMessage().getText() + " executed by @"
                         + update.getMessage().getChat().getUserName());
+
             } else if (messageText.equals(HELP)) {
                 sendMessage(chatId, messages.getString("help_text"));
-                log.info(update.getMessage().getText() + " command executed by @"
+                log.info(update.getMessage().getText() + " executed by @"
                         + update.getMessage().getChat().getUserName());
+
             } else if (messageText.equals(REGISTER)) {
                 confirmScheduledInfoReceipt(chatId);
-                log.info(update.getMessage().getText() + " command executed by @"
+                log.info(update.getMessage().getText() + " executed by @"
                         + update.getMessage().getChat().getUserName());
+
             } else if (messageText.equals(LANGUAGE)) {
                 changeLanguageKeyboardDisplay(chatId);
-                usersState.replace(chatId, SHOW_LANGUAGES);
-                log.info(update.getMessage().getText() + " command executed by @"
+                user.setUserBotState(SHOW_LANGUAGES);
+                userRepository.save(user);
+                log.info(update.getMessage().getText() + "  executed by @"
                         + update.getMessage().getChat().getUserName());
+
             } else if (messageText.equals(DICTIONARY)
                     || messageText.equals(EmojiParser.parseToUnicode(messages
                     .getString("dictionary") + ":gb:" + ":abc:" + ":ru:"))) {
-                usersState.replace(chatId, ASK_PHRASE);
+                user.setUserBotState(ASK_PHRASE);
+                userRepository.save(user);
                 sendMessage(chatId, messages.getString("enter_word"));
-                log.info(update.getMessage().getText() + " command executed by @"
+                log.info(update.getMessage().getText() + "  executed by @"
                         + update.getMessage().getChat().getUserName());
+
             } else if (messageText.equals(WEATHER)
                     || messageText.equals(EmojiParser.parseToUnicode(messages
                     .getString("weather_button") + ":thunder_cloud_rain:"))) {
-                for (UserUnit userUnit : userList) {
-                    if (userUnit.getChatId() == chatId) {
-                        userUnit.line = 0;
-                        userUnit.page = 1;
-                    }
+                if (user.getChatId() == chatId) {
+                    user.line = 0;
+                    user.page = 1;
                 }
                 displayWeatherMenu(chatId);
-                usersState.replace(chatId, SHOW_WEATHER_GETTER_WAY);
-                log.info(update.getMessage().getText() + " command executed by @"
+                user.setUserBotState(SHOW_WEATHER_GETTER_WAY);
+                userRepository.save(user);
+                log.info(update.getMessage().getText() + " executed by @"
                         + update.getMessage().getChat().getUserName());
+
             } else if (messageText.equals(LanguageLocalisation.englishLang)
                     || messageText.equals(LanguageLocalisation.russianLang)) {
                 languageChange(update);
-                usersState.replace(chatId, DEFAULT_STATE);
+                user.setUserBotState(DEFAULT_STATE);
+                userRepository.save(user);
+                log.info(update.getMessage().getText() + " executed by @"
+                        + update.getMessage().getChat().getUserName());
+
             } else if (messageText.equals(MY_DATA)) {
                 String info = myDataCommandReceived(chatId);
                 sendMessage(chatId, info);
-                log.info(update.getMessage().getText() + " command executed by @"
+                log.info(update.getMessage().getText() + " executed by @"
                         + update.getMessage().getChat().getUserName());
+
             } else if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_GETTER_WAY)
                     && messageText.equals("1. Погода по местоположению")) {
                 if (userRepository.findById(chatId).isPresent()) {
-                    User user = userRepository.findById(chatId).get();
                     String coordinates = user.getLocationCoordinates();
                     String[] cord = coordinates.split(", ");
                     double longitude = Double.parseDouble(cord[0]);
                     double latitude = Double.parseDouble(cord[1]);
                     getWeatherFromLocation(chatId, longitude, latitude);
                 }
-                usersState.replace(chatId, DEFAULT_STATE);
+                user.setUserBotState(DEFAULT_STATE);
+                userRepository.save(user);
                 log.info("User @" + update.getMessage().getChat().getUserName() + " sent his location");
-                log.info(update.getMessage().getText() + " command executed by @"
-                        + update.getMessage().getChat().getUserName());
+
             } else if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_GETTER_WAY)
                     && messageText.equals("2. Список регионов")) {
-                usersState.replace(chatId, SHOW_REGION_LIST);
+                user.setUserBotState(SHOW_REGION_LIST);
+                userRepository.save(user);
                 getRegion(chatId);
-                log.info(update.getMessage().getText() + " command executed by @"
+                log.info(update.getMessage().getText() + " executed by @"
                         + update.getMessage().getChat().getUserName());
+
             } else if (isUserMatchedByIdAndBotState(chatId, ASK_PHRASE)) {
-                for (UserUnit userUnit : userList) {
-                    if (userUnit.getChatId() == chatId) {
-                        userUnit.words = update.getMessage().getText();
-                    }
+                if (user.getChatId() == chatId) {
+                    user.words = update.getMessage().getText();
                 }
-                usersState.replace(chatId, ASK_DICTIONARY_OPTION);
+                user.setUserBotState(ASK_DICTIONARY_OPTION);
+                userRepository.save(user);
                 displayDictionaryMenu(chatId);
+
             } else if (messageText.equals(EmojiParser.parseToUnicode("2. English meanings" + ":clipboard:" + ":gb:"))
                     && isUserMatchedByIdAndBotState(chatId, ASK_DICTIONARY_OPTION)) {
                 displayMeaningsOfWord(chatId);
-                for (UserUnit userUnit : userList) {
-                    if (userUnit.getChatId() == chatId) {
-                        userUnit.words = null;
-                    }
+                if (user.getChatId() == chatId) {
+                    user.words = null;
                 }
-                usersState.replace(chatId, DEFAULT_STATE);
+                user.setUserBotState(DEFAULT_STATE);
+                userRepository.save(user);
+                log.info(update.getMessage().getText() + " executed by @"
+                        + update.getMessage().getChat().getUserName());
+
             } else if (messageText.equals(EmojiParser.parseToUnicode("3. Russian-english sentences" + ":gb:" + ":ru:"))
                     && isUserMatchedByIdAndBotState(chatId, ASK_DICTIONARY_OPTION)) {
                 displayRusEngSentences(chatId);
-                for (UserUnit userUnit : userList) {
-                    if (userUnit.getChatId() == chatId) {
-                        userUnit.words = null;
-                    }
+                if (user.getChatId() == chatId) {
+                    user.words = null;
                 }
-                usersState.replace(chatId, DEFAULT_STATE);
+                user.setUserBotState(DEFAULT_STATE);
+                userRepository.save(user);
+                log.info(update.getMessage().getText() + " executed by @"
+                        + update.getMessage().getChat().getUserName());
+
             } else if (messageText.equals(EmojiParser.parseToUnicode("4. English sentences" + ":abc:" + ":gb:"))
                     && isUserMatchedByIdAndBotState(chatId, ASK_DICTIONARY_OPTION)) {
                 displayExamplesWithSentences(chatId);
-                for (UserUnit userUnit : userList) {
-                    if (userUnit.getChatId() == chatId) {
-                        userUnit.words = null;
-                    }
+                if (user.getChatId() == chatId) {
+                    user.words = null;
                 }
-                usersState.replace(chatId, DEFAULT_STATE);
+                user.setUserBotState(DEFAULT_STATE);
+                userRepository.save(user);
+                log.info(update.getMessage().getText() + " executed by @"
+                        + update.getMessage().getChat().getUserName());
+
             } else {
                 if (isUserMatchedByIdAndBotState(chatId, DEFAULT_STATE)) {
                     sendMessage(chatId, messages.getString("non-existing_command"));
@@ -221,142 +248,165 @@ public class TelegramBot extends TelegramLongPollingBot {
                             + update.getMessage().getText() + ". ");
                 }
             }
+
         } else if (update.hasCallbackQuery()) {
             String callBackData = update.getCallbackQuery().getData();
             int messageId = update.getCallbackQuery().getMessage().getMessageId();
             long chatId = update.getCallbackQuery().getMessage().getChatId();
-            try {
-                executeTyping(chatId);
-                Thread.sleep(500);
-            } catch (InterruptedException e) {
-                log.warn("Error occurred while attempting this command: ", e);
-            }
+            User user = getUser(chatId);
+            executeBotTypingProcess(chatId);
             switch (callBackData) {
                 case "YES_BUTTON" -> {
                     String yesPressed = messages.getString("yes_pressed");
                     executeEditMessage(messageId, chatId, yesPressed);
                 }
+
                 case "NO_BUTTON" -> {
                     String noPressed = messages.getString("no_pressed");
                     executeEditMessage(messageId, chatId, noPressed);
                 }
+
                 case "BACK_BUTTON" -> {
-                    for (UserUnit userUnit : userList) {
-                        if (userUnit.getChatId() == chatId) {
-                            if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST) && userUnit.line != 0) {
-                                userUnit.line = userUnit.line - 10;
-                                deleteMessage(messageId, chatId);
-                                --userUnit.page;
-                                getRegion(chatId);
-                            } else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST) && userUnit.line != 0) {
-                                userUnit.line = userUnit.line - 10;
-                                deleteMessage(messageId, chatId);
-                                --userUnit.page;
+                    if (user.getChatId() == chatId) {
+                        if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST) && user.line != 0) {
+                            user.line = user.line - 10;
+                            deleteMessage(messageId, chatId);
+                            --user.page;
+                            userRepository.save(user);
+                            getRegion(chatId);
+
+                        } else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST) && user.line != 0) {
+                            user.line = user.line - 10;
+                            deleteMessage(messageId, chatId);
+                            --user.page;
+                            userRepository.save(user);
+                            getSettlement(chatId);
+
+                        } else if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_IN_SETTLEMENT) && user.page > 0) {
+                            deleteMessage(messageId, chatId);
+                            --user.page;
+                            userRepository.save(user);
+
+                        } else {
+                            user.line = 0;
+                            userRepository.save(user);
+                            deleteMessage(messageId, chatId);
+                            if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) getRegion(chatId);
+                            else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST))
                                 getSettlement(chatId);
-                            } else if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_IN_SETTLEMENT) && userUnit.page > 0) {
-                                deleteMessage(messageId, chatId);
-                                --userUnit.page;
-                            } else {
-                                userUnit.line = 0;
-                                deleteMessage(messageId, chatId);
-                                if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) getRegion(chatId);
-                                else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST))
-                                    getSettlement(chatId);
-                            }
                         }
                     }
                 }
+
                 case "CANCEL_BUTTON" -> {
-                    usersState.replace(chatId, DEFAULT_STATE);
+                    user.setUserBotState(DEFAULT_STATE);
                     deleteMessage(messageId, chatId);
+                    userRepository.save(user);
                     sendMessage(chatId, messages.getString("click_button"));
                 }
+
                 case "FORWARD_BUTTON" -> {
-                    for (UserUnit userUnit : userList) {
-                        if (userUnit.getChatId() == chatId) {
-                            if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)
-                                    && userUnit.page < countLines(chatId) / 10 + 1) {
-                                userUnit.line = userUnit.line + 10;
-                                deleteMessage(messageId, chatId);
-                                ++userUnit.page;
-                                getRegion(chatId);
-                            } else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST)
-                                    && userUnit.page < countLines(chatId) / 10 + 1) {
-                                userUnit.line = userUnit.line + 10;
-                                deleteMessage(messageId, chatId);
-                                ++userUnit.page;
+                    if (user.getChatId() == chatId) {
+                        if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)
+                                && user.page < countLines(chatId) / 10 + 1) {
+                            user.line = user.line + 10;
+                            deleteMessage(messageId, chatId);
+                            ++user.page;
+                            userRepository.save(user);
+                            getRegion(chatId);
+
+                        } else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST)
+                                && user.page < countLines(chatId) / 10 + 1) {
+                            user.line = user.line + 10;
+                            deleteMessage(messageId, chatId);
+                            ++user.page;
+                            userRepository.save(user);
+                            getSettlement(chatId);
+
+                        } else if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_IN_SETTLEMENT) && user.page <= 10) {
+                            deleteMessage(messageId, chatId);
+                            ++user.page;
+                            userRepository.save(user);
+
+                        } else {
+                            deleteMessage(messageId, chatId);
+                            if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) getRegion(chatId);
+                            else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST))
                                 getSettlement(chatId);
-                            } else if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_IN_SETTLEMENT) && userUnit.page <= 10) {
-                                deleteMessage(messageId, chatId);
-                                ++userUnit.page;
-                            } else {
-                                deleteMessage(messageId, chatId);
-                                if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) getRegion(chatId);
-                                else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST))
-                                    getSettlement(chatId);
-                            }
                         }
                     }
                 }
             }
+
             if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) {
-                for (UserUnit userUnit : userList) {
-                    if (userUnit.getChatId() == chatId) {
-                        for (Map.Entry<String, String> entry : userUnit.regions.entrySet()) {
-                            if (entry.getKey().equals(callBackData)) {
-                                executeEditMessage(messageId, chatId, messages.getString("region_chosen") + " "
-                                        + callBackData);
-                                userUnit.region = callBackData;
-                                usersState.replace(chatId, SHOW_SETTLEMENT_LIST);
-                                userUnit.page = 1;
-                                userUnit.line = 0;
-                                break;
-                            }
+                if (user.getChatId() == chatId) {
+                    for (Map.Entry<String, String> entry : user.regions.entrySet()) {
+                        if (entry.getKey().equals(callBackData)) {
+                            executeEditMessage(messageId, chatId, messages.getString("region_chosen") + " "
+                                    + callBackData);
+                            user.region = callBackData;
+                            user.setUserBotState(SHOW_SETTLEMENT_LIST);
+                            user.page = 1;
+                            user.line = 0;
+                            userRepository.save(user);
+                            break;
                         }
                     }
                 }
                 getSettlement(chatId);
             }
+
             if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST)) {
-                for (UserUnit userUnit : userList) {
-                    if (userUnit.getChatId() == chatId) {
-                        for (Map.Entry<String, String> entry : userUnit.settlements.entrySet()) {
-                            if (entry.getKey().equals(callBackData)) {
-                                userUnit.settlement = callBackData;
-                                executeEditMessage(messageId, chatId, messages.getString("settlement_chosen")
-                                        + callBackData);
-                                usersState.replace(chatId, SHOW_WEATHER_IN_SETTLEMENT);
-                                userUnit.page = 1;
-                                userUnit.line = 0;
-                                break;
-                            }
+                if (user.getChatId() == chatId) {
+                    for (Map.Entry<String, String> entry : user.settlements.entrySet()) {
+                        if (entry.getKey().equals(callBackData)) {
+                            user.settlement = callBackData;
+                            executeEditMessage(messageId, chatId, messages.getString("settlement_chosen")
+                                    + callBackData);
+                            user.setUserBotState(SHOW_WEATHER_IN_SETTLEMENT);
+                            user.page = 1;
+                            user.line = 0;
+                            userRepository.save(user);
+                            break;
                         }
                     }
                 }
             }
+
             if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_IN_SETTLEMENT)) {
-                for (UserUnit userUnit : userList) {
-                    if (userUnit.getChatId() == chatId) {
-                        getWeatherFromSettlement(chatId);
-                        if (userRepository.findById(userUnit.getChatId()).isPresent()) {
-                            log.info("@" + userRepository.findById(userUnit.getChatId()).get().getUserName() + " received weather in "
-                                    + userUnit.settlement + " for day " + userUnit.page);
-                        }
-                    }
-                }
+                getWeatherFromSettlement(chatId);
+                log.info("@" + user.getUserName() + " received weather in "
+                        + user.settlement + " for day " + user.page);
             }
         }
     }
 
+    public void onUpdateLocationReceived(Update update) {
+        long chatId = update.getMessage().getChatId();
+        User user = getUser(chatId);
+        Location location = update.getMessage().getLocation();
+        double longitude = location.getLongitude();
+        double latitude = location.getLatitude();
+        if (userRepository.findById(chatId).isPresent()) {
+            user.setLocationCoordinates(String.format("%s, %s", longitude, latitude));
+            userRepository.save(user);
+            log.info("User's location updated: " + user);
+        }
+        getWeatherFromLocation(chatId, longitude, latitude);
+        user.setUserBotState(DEFAULT_STATE);
+        userRepository.save(user);
+        log.info("User @" + update.getMessage().getChat().getUserName() + " sent his location");
+    }
 
-    private void deleteMessage(int messageId, long chatId) {
+
+    public void deleteMessage(int messageId, long chatId) {
         DeleteMessage deleteMessage = new DeleteMessage();
         deleteMessage.setMessageId(messageId);
         deleteMessage.setChatId(String.valueOf(chatId));
         tryToExecuteMessage(deleteMessage);
     }
 
-    private void displayDictionaryMenu(long chatId) {
+    public void displayDictionaryMenu(long chatId) {
         SendMessage sendMessage = new SendMessage();
         sendMessage.setChatId(String.valueOf(chatId));
         sendMessage.setText("""
@@ -404,119 +454,67 @@ public class TelegramBot extends TelegramLongPollingBot {
 
     }
 
-    private void displayMeaningsOfWord(long chatId) {
-        for (UserUnit userUnit : userList) {
-            if (userUnit.getChatId() == chatId) {
-                try {
-                    Document doc = Jsoup.connect("https://dictionary.cambridge.org/dictionary/english/" + userUnit.words).get();
-                    Elements elements = doc.getElementsByClass("sense-body dsense_b");
-                    for (Element element : elements) {
-                        sendMessage(chatId, element.getElementsByClass("def ddef_d db")
-                                .text().replace(":", "\n"));
-                    }
-                } catch (IOException e) {
-                    sendMessage(chatId, "Word or phrase hasn't been found.");
-                    userUnit.words = null;
-                    usersState.replace(chatId, DEFAULT_STATE);
-                    log.warn("Error occurred while attempting this command: ", e);
+    public void displayMeaningsOfWord(long chatId) {
+        User user = getUser(chatId);
+        if (user.getChatId() == chatId) {
+            try {
+                Document doc = Jsoup.connect("https://dictionary.cambridge.org/dictionary/english/" + user.words).get();
+                Elements elements = doc.getElementsByClass("sense-body dsense_b");
+                for (Element element : elements) {
+                    sendMessage(chatId, element.getElementsByClass("def ddef_d db")
+                            .text().replace(":", "\n"));
                 }
+            } catch (IOException e) {
+                sendMessage(chatId, "Word or phrase hasn't been found.");
+                user.words = null;
+                user.setUserBotState(DEFAULT_STATE);
+                userRepository.save(user);
+                log.warn("Error occurred while attempting this command: ", e);
             }
         }
     }
 
-    private void displayRusEngSentences(long chatId) {
-        for (UserUnit userUnit : userList) {
-            if (userUnit.getChatId() == chatId) {
-                try {
-                    String url = "https://context.reverso.net/перевод/английский-русский/" + userUnit.words;
-                    Document doc = Jsoup.connect(url).get();
-                    Elements elements = doc.body().getElementsByClass("example");
-                    for (Element element : elements) {
-                        sendMessage(chatId, element.getElementsByClass("trg ltr").text()
-                                + "\n" + element.getElementsByClass("src ltr").text());
-                    }
-                } catch (IOException e) {
-                    sendMessage(chatId, "Word or phrase hasn't been found.");
-                    userUnit.words = null;
-                    usersState.replace(chatId, DEFAULT_STATE);
-                    log.warn("Error occurred while attempting this command: ", e);
+    public void displayRusEngSentences(long chatId) {
+        User user = getUser(chatId);
+        if (user.getChatId() == chatId) {
+            try {
+                String url = "https://context.reverso.net/перевод/английский-русский/" + user.words;
+                Document doc = Jsoup.connect(url).get();
+                Elements elements = doc.body().getElementsByClass("example");
+                for (Element element : elements) {
+                    sendMessage(chatId, element.getElementsByClass("trg ltr").text()
+                            + "\n" + element.getElementsByClass("src ltr").text());
                 }
+            } catch (IOException e) {
+                sendMessage(chatId, "Word or phrase hasn't been found.");
+                user.words = null;
+                user.setUserBotState(DEFAULT_STATE);
+                userRepository.save(user);
+                log.warn("Error occurred while attempting this command: ", e);
             }
         }
     }
 
-    private void displayExamplesWithSentences(long chatId) {
-        for (UserUnit userUnit : userList) {
-            if (userUnit.getChatId() == chatId) {
-                try {
-                    Document doc = Jsoup.connect("https://dictionary.cambridge.org/dictionary/english/" + userUnit.words).get();
-                    Elements elements3 = doc.body().getElementsByClass("lbb lb-cm lpt-10");
-                    for (Element element : elements3) {
-                        sendMessage(chatId, element.getElementsByClass("deg").text());
-                    }
-                } catch (IOException e) {
-                    sendMessage(chatId, "Word or phrase hasn't been found.");
-                    userUnit.words = null;
-                    usersState.replace(chatId, DEFAULT_STATE);
-                    log.warn("Error occurred while attempting this command: ", e);
+    public void displayExamplesWithSentences(long chatId) {
+        User user = getUser(chatId);
+        if (user.getChatId() == chatId) {
+            try {
+                Document doc = Jsoup.connect("https://dictionary.cambridge.org/dictionary/english/" + user.words).get();
+                Elements elements3 = doc.body().getElementsByClass("lbb lb-cm lpt-10");
+                for (Element element : elements3) {
+                    sendMessage(chatId, element.getElementsByClass("deg").text());
                 }
+            } catch (IOException e) {
+                sendMessage(chatId, "Word or phrase hasn't been found.");
+                user.words = null;
+                user.setUserBotState(DEFAULT_STATE);
+                userRepository.save(user);
+                log.warn("Error occurred while attempting this command: ", e);
             }
         }
     }
 
-    private void executeEditMessage(int messageId, long chatId, String text) {
-        EditMessageText message = new EditMessageText();
-        message.setChatId(String.valueOf(chatId));
-        message.setText(text);
-        message.setMessageId(messageId);
-        try {
-            execute(message);
-        } catch (TelegramApiException e) {
-            log.warn("Error occurred while attempting this command: ", e);
-        }
-    }
-
-    private void confirmScheduledInfoReceipt(long chatId) {
-        SendMessage sendMessage = new SendMessage();
-        sendMessage.setChatId(String.valueOf(chatId));
-        sendMessage.setText("Confirm your registration.");
-
-        InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
-        List<List<InlineKeyboardButton>> rowsInLine = new ArrayList<>();
-        List<InlineKeyboardButton> rowInLine = new ArrayList<>();
-
-        InlineKeyboardButton yesButton = new InlineKeyboardButton();
-        yesButton.setText("Yes");
-        yesButton.setCallbackData("YES_BUTTON");
-
-        InlineKeyboardButton noButton = new InlineKeyboardButton();
-        noButton.setText("No");
-        noButton.setCallbackData("NO_BUTTON");
-
-        rowInLine.add(yesButton);
-        rowInLine.add(noButton);
-
-        rowsInLine.add(rowInLine);
-
-        markupInline.setKeyboard(rowsInLine);
-        sendMessage.setReplyMarkup(markupInline);
-
-        tryToExecuteMessage(sendMessage);
-    }
-
-    private String myDataCommandReceived(long chatId) {
-        String msg = "";
-        if (userRepository.findById(chatId).isPresent()) {
-            User user = userRepository.findById(chatId).get();
-            msg = " " + user.getUserName() + "\n"
-                    + user.getRegisteredTime() + "\n"
-                    + user.getFirstName() + "\n"
-                    + user.getChatId();
-        }
-        return msg;
-    }
-
-    private void displayWeatherMenu(long chatId) {
+    public void displayWeatherMenu(long chatId) {
         SendMessage sendMessage = new SendMessage();
         sendMessage.setChatId(String.valueOf(chatId));
         sendMessage.setText("""
@@ -560,7 +558,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         tryToExecuteMessage(sendMessage);
     }
 
-    private String getUrl(Map<String, String> elements, String callbackData) {
+    public String getUrl(Map<String, String> elements, String callbackData) {
         String elementUrl = null;
         for (Map.Entry<String, String> entry : elements.entrySet()) {
             if (entry.getKey().equals(callbackData))
@@ -569,167 +567,171 @@ public class TelegramBot extends TelegramLongPollingBot {
         return elementUrl;
     }
 
-    private Document extractCallbackDataUrlFromElements(Map<String, String> elements, String callbackData, long chatId) {
+    public Document extractCallbackDataUrlFromElements(Map<String, String> elements, String callbackData, long chatId) {
+        User user = getUser(chatId);
         Document doc = null;
         try {
             doc = Jsoup.connect(getUrl(elements, callbackData)).get();
         } catch (IOException | ValidationException | NullPointerException e) {
             log.warn("Error occurred while attempting this command: ", e);
-            usersState.replace(chatId, DEFAULT_STATE);
+            user.setUserBotState(DEFAULT_STATE);
+            userRepository.save(user);
         }
 
         return doc;
     }
 
-    private Document connectToUrl(String url, long chatId) {
+    public Document connectToUrl(String url, long chatId) {
+        User user = getUser(chatId);
         Document doc = null;
         try {
             doc = Jsoup.connect(url).get();
         } catch (IOException | ValidationException | NullPointerException e) {
             log.warn("Error occurred while attempting this command: ", e);
-            usersState.replace(chatId, DEFAULT_STATE);
+            user.setUserBotState(DEFAULT_STATE);
+            userRepository.save(user);
         }
 
         return doc;
     }
 
-    private void getWeatherFromLocation(long chatId, double longitude, double latitude) {
+    public void getWeatherFromLocation(long chatId, double longitude, double latitude) {
         try {
-            Document doc = Jsoup.connect(String.format("https://yandex.ru/pogoda/?lat=%f&lon=3%f&via=hnav",
-                    longitude, latitude)).get();
+            String url = "https://yandex.ru/pogoda/" + String.format(
+                    "?lat=%f&lon=%f&via=hnav",
+                    latitude, longitude).replace(",", ".");
+            Document doc = Jsoup.connect(url).userAgent("Mozilla").ignoreContentType(true)
+                    .ignoreHttpErrors(true).get();
             sendMessage(chatId, doc.getElementById("main_title").text());
             Elements elements = doc.body().getElementsByClass("a11y-hidden");
             StringBuilder sb = new StringBuilder();
             for (Element element : elements) {
-                if (!element.text().contains("Закат")
-                        || !element.text().contains("Восход")
-                        || !element.text().contains("Погода на карте")) {
-                    String str = element.text()
-                            .replace("В ", EmojiParser.parseToUnicode(":thermometer:"))
-                            .replace(" часа", ":00")
-                            .replace(" часов", ":00")
-                            .replace(" час", ":00");
-                    sb.append(str).append("\n");
-                }
+                if (element.text().contains("В 0 часов")) break;
+                String str = element.text()
+                        .replace("В ", EmojiParser.parseToUnicode(":thermometer:"))
+                        .replace(" часа", ":00")
+                        .replace(" часов", ":00")
+                        .replace(" час", ":00");
+                sb.append(str).append("\n");
             }
             sendMessage(chatId, sb.toString());
             sendMessage(chatId, doc.body().getElementsByClass("sun-card__day-duration").text());
+
         } catch (IOException e) {
             log.warn("Error occurred while attempting this command: ", e);
         }
     }
 
-    private int countLines(long chatId) {
-        for (UserUnit userUnit : userList) {
-            if (userUnit.getChatId() == chatId) {
-                int numOfLines = 0;
-                if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) {
-                    Document doc = connectToUrl("https://world-weather.ru/pogoda/russia", chatId);
-                    Elements links = doc.select("a[href]");
-                    for (Element element : links) {
-                        if (element.attr("href").contains("/pogoda")
-                                && !element.text().equals("Весь мир")) {
-                            numOfLines++;
-                        }
+    public int countLines(long chatId) {
+        User user = getUser(chatId);
+        if (user.getChatId() == chatId) {
+            int numOfLines = 0;
+            if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) {
+                Document doc = connectToUrl("https://world-weather.ru/pogoda/russia", chatId);
+                Elements links = doc.select("a[href]");
+                for (Element element : links) {
+                    if (element.attr("href").contains("/pogoda")
+                            && !element.text().equals("Весь мир")) {
+                        numOfLines++;
                     }
-                    return numOfLines;
-                } else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST)) {
-                    Document doc = extractCallbackDataUrlFromElements(userUnit.regions, userUnit.region, chatId);
-                    Elements links = doc.select("a[href]");
-                    for (Element element : links) {
-                        if (element.attr("href").contains("/pogoda")
-                                && !element.text().equals("Весь мир")
-                                && !element.text().equals("Россия")) {
-                            numOfLines++;
-                        }
-                    }
-                    return numOfLines;
                 }
+                return numOfLines;
+            } else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST)) {
+                Document doc = extractCallbackDataUrlFromElements(user.regions, user.region, chatId);
+                Elements links = doc.select("a[href]");
+                for (Element element : links) {
+                    if (element.attr("href").contains("/pogoda")
+                            && !element.text().equals("Весь мир")
+                            && !element.text().equals("Россия")) {
+                        numOfLines++;
+                    }
+                }
+                return numOfLines;
             }
         }
         return 0;
     }
 
-    private void getRegion(Long chatId) {
-        for (UserUnit userUnit : userList) {
-            if (userUnit.getChatId() == chatId) {
+    public void getRegion(long chatId) {
+        User user = getUser(chatId);
+        if (user.getChatId() == chatId) {
+            SendMessage sendMessage = new SendMessage();
+            sendMessage.setChatId(String.valueOf(chatId));
+            sendMessage.setText(messages.getString("region_list") + user.page + "/" + (countLines(chatId) / 10 + 1) + ": ");
+
+            Document doc = connectToUrl("https://world-weather.ru/pogoda/russia", chatId);
+            Elements links = doc.select("a[href]");
+
+            if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) {
+                user.regions = new TreeMap<>();
+                InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
+                List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
+                int j = 0;
+                for (int i = user.line; j < 10; i++) {
+                    try {
+                        if (links.get(i).attr("href").contains("/pogoda")
+                                && !links.get(i).text().equals("Весь мир")) {
+                            j++;
+                            user.regions.put(links.get(i).text(), links.get(i).attr("href"));
+                        }
+                    } catch (IndexOutOfBoundsException e) {
+                        break;
+                    }
+                }
+                int i = 0;
+                for (Map.Entry<String, String> regionEntry : user.regions.entrySet()) {
+                    inlineKeyboardCreate(rowsInline, ++i, regionEntry.getKey());
+                }
+                putGeneralButtons(rowsInline);
+                markupInline.setKeyboard(rowsInline);
+                sendMessage.setReplyMarkup(markupInline);
+                tryToExecuteMessage(sendMessage);
+                userRepository.save(user);
+            }
+        }
+    }
+
+    public void getSettlement(long chatId) {
+        User user = getUser(chatId);
+        if (user.getChatId() == chatId) {
+            if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST)) {
+                user.settlements = new TreeMap<>();
                 SendMessage sendMessage = new SendMessage();
                 sendMessage.setChatId(String.valueOf(chatId));
-                sendMessage.setText(messages.getString("region_list") + userUnit.page + "/" + (countLines(chatId) / 10 + 1) + ": ");
+                sendMessage.setText(messages.getString("settlement_list") + user.page + "/" + (countLines(chatId) / 10 + 1) + ": ");
+                Document doc = extractCallbackDataUrlFromElements(user.regions, user.region, chatId);
 
-                Document doc = connectToUrl("https://world-weather.ru/pogoda/russia", chatId);
                 Elements links = doc.select("a[href]");
+                InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
+                List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
 
-                if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) {
-                    userUnit.regions = new TreeMap<>();
-                    InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
-                    List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
-                    int j = 0;
-                    for (int i = userUnit.line; j < 10; i++) {
-                        try {
-                            if (links.get(i).attr("href").contains("/pogoda")
-                                    && !links.get(i).text().equals("Весь мир")) {
-                                j++;
-                                userUnit.regions.put(links.get(i).text(), links.get(i).attr("href"));
-                            }
-                        } catch (IndexOutOfBoundsException e) {
-                            break;
+                int j = 0;
+                for (int i = user.line; j < 10; i++) {
+                    try {
+                        if (links.get(i).attr("href").contains("/pogoda")
+                                && !links.get(i).text().equals("Весь мир")
+                                && !links.get(i).text().equals("Россия")) {
+                            j++;
+                            user.settlements.put(links.get(i).text(), "http:" + links.get(i).attr("href") + "10days");
                         }
+                    } catch (IndexOutOfBoundsException e) {
+                        break;
                     }
-                    int i = 0;
-                    for (Map.Entry<String, String> regionEntry : userUnit.regions.entrySet()) {
-                        inlineKeyboardCreate(rowsInline, ++i, regionEntry.getKey());
-                    }
-                    putGeneralButtons(rowsInline);
-                    markupInline.setKeyboard(rowsInline);
-                    sendMessage.setReplyMarkup(markupInline);
-                    tryToExecuteMessage(sendMessage);
                 }
+                int i = 0;
+                for (Map.Entry<String, String> settlementEntry : user.settlements.entrySet()) {
+                    inlineKeyboardCreate(rowsInline, ++i, settlementEntry.getKey());
+                }
+                putGeneralButtons(rowsInline);
+                markupInline.setKeyboard(rowsInline);
+                sendMessage.setReplyMarkup(markupInline);
+                tryToExecuteMessage(sendMessage);
+                userRepository.save(user);
             }
         }
     }
 
-    private void getSettlement(Long chatId) {
-        for (UserUnit userUnit : userList) {
-            if (userUnit.getChatId() == chatId) {
-                if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST)) {
-                    userUnit.settlements = new TreeMap<>();
-                    SendMessage sendMessage = new SendMessage();
-                    sendMessage.setChatId(String.valueOf(chatId));
-                    sendMessage.setText(messages.getString("settlement_list") + userUnit.page + "/" + (countLines(chatId) / 10 + 1) + ": ");
-                    Document doc = extractCallbackDataUrlFromElements(userUnit.regions, userUnit.region, chatId);
-
-                    Elements links = doc.select("a[href]");
-                    InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
-                    List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
-
-                    int j = 0;
-                    for (int i = userUnit.line; j < 10; i++) {
-                        try {
-                            if (links.get(i).attr("href").contains("/pogoda")
-                                    && !links.get(i).text().equals("Весь мир")
-                                    && !links.get(i).text().equals("Россия")) {
-                                j++;
-                                userUnit.settlements.put(links.get(i).text(), "http:" + links.get(i).attr("href") + "10days");
-                            }
-                        } catch (IndexOutOfBoundsException e) {
-                            break;
-                        }
-                    }
-                    int i = 0;
-                    for (Map.Entry<String, String> settlementEntry : userUnit.settlements.entrySet()) {
-                        inlineKeyboardCreate(rowsInline, ++i, settlementEntry.getKey());
-                    }
-                    putGeneralButtons(rowsInline);
-                    markupInline.setKeyboard(rowsInline);
-                    sendMessage.setReplyMarkup(markupInline);
-                    tryToExecuteMessage(sendMessage);
-                }
-            }
-        }
-    }
-
-    private void inlineKeyboardCreate(List<List<InlineKeyboardButton>> rowsInline, int i, String linkText) {
+    public void inlineKeyboardCreate(List<List<InlineKeyboardButton>> rowsInline, int i, String linkText) {
         InlineKeyboardButton inlineKeyboardButton = new InlineKeyboardButton();
         inlineKeyboardButton.setText(i + ". " + linkText);
         inlineKeyboardButton.setCallbackData(linkText);
@@ -738,7 +740,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         rowsInline.add(rowInLine);
     }
 
-    private void putGeneralButtons(List<List<InlineKeyboardButton>> rowsInline) {
+    public void putGeneralButtons(List<List<InlineKeyboardButton>> rowsInline) {
         InlineKeyboardButton backButton = new InlineKeyboardButton();
         backButton.setText(EmojiParser.parseToUnicode(":arrow_left:"));
         backButton.setCallbackData("BACK_BUTTON");
@@ -759,52 +761,52 @@ public class TelegramBot extends TelegramLongPollingBot {
         rowsInline.add(rowInLine);
     }
 
-    private void getWeatherFromSettlement(long chatId) {
-        for (UserUnit userUnit : userList) {
-            if (userUnit.getChatId() == chatId) {
-                Document doc = extractCallbackDataUrlFromElements(userUnit.settlements, userUnit.settlement, chatId);
-                Elements elements = doc.body().getElementsByClass("weather-short");
-                Elements sunRisesElems = doc.body().getElementsByClass("sun-box");
-                String elements1 = doc.getElementsByClass("weather-temperature").outerHtml();
-                String[] weather = elements1.replace("<td class=\"weather-temperature\">", "").split("\n");
-                String elements2 = doc.getElementsByClass("weather-wind").outerHtml();
-                String[] wind = elements2.split("\n");
-                int i = 0;
-                int j = 0;
-                int m = 0;
-                SendMessage sendMessage = new SendMessage();
-                sendMessage.setChatId(String.valueOf(chatId));
-                userUnit.days = new ArrayList<>();
-                for (Element element : elements) {
-                    userUnit.days.add(EmojiParser.parseToUnicode(":calendar:")
-                            + (element.getElementsByClass("dates short-d").hasText()
-                            ? ("*" + element.getElementsByClass("dates short-d").text() + "*" + " \n")
-                            : ("*" + element.getElementsByClass("dates short-d red").text()) + "*" + " \n")
-                            + "---------------------------------" + "\n"
-                            + parseWeatherStrings(element, weather, 1 + 2 * j++, "night", wind, m++) + "\n"
-                            + parseWeatherStrings(element, weather, 1 + 2 * j++, "morning", wind, m++) + "\n"
-                            + parseWeatherStrings(element, weather, 1 + 2 * j++, "day", wind, m++) + "\n"
-                            + parseWeatherStrings(element, weather, 1 + 2 * j++, "evening", wind, m++) + "\n"
-                            + EmojiParser.parseToUnicode(":sunrise:")
-                            + "Восход: " + sunRisesElems.get(i).text().split(" ")[0] + "\n"
-                            + EmojiParser.parseToUnicode(":sunrise_over_mountains:")
-                            + " Закат: " + sunRisesElems.get(i).text().split(" ")[1]);
-                }
-                sendMessage.setParseMode(ParseMode.MARKDOWN);
-                if (userUnit.page < 1) userUnit.page = 1;
-                if (userUnit.page > 10) userUnit.page = 10;
-                sendMessage.setText(userUnit.days.get(userUnit.page - 1));
-                InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
-                List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
-                putGeneralButtons(rowsInline);
-                markupInline.setKeyboard(rowsInline);
-                sendMessage.setReplyMarkup(markupInline);
-                tryToExecuteMessage(sendMessage);
+    public void getWeatherFromSettlement(long chatId) {
+        User user = getUser(chatId);
+        if (user.getChatId() == chatId) {
+            Document doc = extractCallbackDataUrlFromElements(user.settlements, user.settlement, chatId);
+            Elements elements = doc.body().getElementsByClass("weather-short");
+            Elements sunRisesElems = doc.body().getElementsByClass("sun-box");
+            String elements1 = doc.getElementsByClass("weather-temperature").outerHtml();
+            String[] weather = elements1.replace("<td class=\"weather-temperature\">", "").split("\n");
+            String elements2 = doc.getElementsByClass("weather-wind").outerHtml();
+            String[] wind = elements2.split("\n");
+            int i = 0;
+            int j = 0;
+            int m = 0;
+            SendMessage sendMessage = new SendMessage();
+            sendMessage.setChatId(String.valueOf(chatId));
+            user.days = new ArrayList<>();
+            for (Element element : elements) {
+                user.days.add(EmojiParser.parseToUnicode(":calendar:")
+                        + (element.getElementsByClass("dates short-d").hasText()
+                        ? ("*" + element.getElementsByClass("dates short-d").text() + "*" + " \n")
+                        : ("*" + element.getElementsByClass("dates short-d red").text()) + "*" + " \n")
+                        + "---------------------------------" + "\n"
+                        + parseWeatherStrings(element, weather, 1 + 2 * j++, "night", wind, m++) + "\n"
+                        + parseWeatherStrings(element, weather, 1 + 2 * j++, "morning", wind, m++) + "\n"
+                        + parseWeatherStrings(element, weather, 1 + 2 * j++, "day", wind, m++) + "\n"
+                        + parseWeatherStrings(element, weather, 1 + 2 * j++, "evening", wind, m++) + "\n"
+                        + EmojiParser.parseToUnicode(":sunrise:")
+                        + "Восход: " + sunRisesElems.get(i).text().split(" ")[0] + "\n"
+                        + EmojiParser.parseToUnicode(":sunrise_over_mountains:")
+                        + " Закат: " + sunRisesElems.get(i++).text().split(" ")[1]);
             }
+            sendMessage.setParseMode(ParseMode.MARKDOWN);
+            if (user.page < 1) user.page = 1;
+            if (user.page > 10) user.page = 10;
+            sendMessage.setText(user.days.get(user.page - 1));
+            InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
+            List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
+            putGeneralButtons(rowsInline);
+            markupInline.setKeyboard(rowsInline);
+            sendMessage.setReplyMarkup(markupInline);
+            tryToExecuteMessage(sendMessage);
+            userRepository.save(user);
         }
     }
 
-    public static String parseWeatherStrings(Element element, String[] weather, int j, String elementByClass, String[] wind, int m) {
+    public String parseWeatherStrings(Element element, String[] weather, int j, String elementByClass, String[] wind, int m) {
         String[] params = element.getElementsByClass(elementByClass).text().split(" ");
         return addEmojiToDaytime(params[0]) + "\n"
                 + addEmojiToWeatherString(weather, j) + "\n"
@@ -816,7 +818,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                 + EmojiParser.parseToUnicode(":droplet:") + "_Влажность воздуха:_ " + params[6] + "\n";
     }
 
-    public static String addEmojiToDaytime(String str) {
+    public String addEmojiToDaytime(String str) {
         return switch (str) {
             case "Ночь" -> EmojiParser.parseToUnicode(":new_moon_with_face: *Ночь*");
             case "Утро" -> EmojiParser.parseToUnicode(":sunrise: *Утро*");
@@ -826,7 +828,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         };
     }
 
-    public static String addEmojiToWeatherString(String[] weather, int j) {
+    public String addEmojiToWeatherString(String[] weather, int j) {
         String str = "";
         switch (weather[j].split("\"")[3]) {
             case "Преимущественно облачно" ->
@@ -850,7 +852,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         return str;
     }
 
-    public static String replaceWindDirectionWithEmoji(String[] wind, int m) {
+    public String replaceWindDirectionWithEmoji(String[] wind, int m) {
         String str = "";
         switch (wind[m].split("\"")[5]) {
             case "восточный" -> str = EmojiParser.parseToUnicode(":arrow_right:");
@@ -865,7 +867,55 @@ public class TelegramBot extends TelegramLongPollingBot {
         return str;
     }
 
-    private void changeLanguageKeyboardDisplay(long chatId) {
+    public void executeEditMessage(int messageId, long chatId, String text) {
+        EditMessageText message = new EditMessageText();
+        message.setChatId(String.valueOf(chatId));
+        message.setText(text);
+        message.setMessageId(messageId);
+        try {
+            execute(message);
+        } catch (TelegramApiException e) {
+            log.warn("Error occurred while attempting this command: ", e);
+        }
+    }
+
+    public void confirmScheduledInfoReceipt(long chatId) {
+        SendMessage sendMessage = new SendMessage();
+        sendMessage.setChatId(String.valueOf(chatId));
+        sendMessage.setText("Confirm your registration.");
+
+        InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
+        List<List<InlineKeyboardButton>> rowsInLine = new ArrayList<>();
+        List<InlineKeyboardButton> rowInLine = new ArrayList<>();
+
+        InlineKeyboardButton yesButton = new InlineKeyboardButton();
+        yesButton.setText("Yes");
+        yesButton.setCallbackData("YES_BUTTON");
+
+        InlineKeyboardButton noButton = new InlineKeyboardButton();
+        noButton.setText("No");
+        noButton.setCallbackData("NO_BUTTON");
+
+        rowInLine.add(yesButton);
+        rowInLine.add(noButton);
+
+        rowsInLine.add(rowInLine);
+
+        markupInline.setKeyboard(rowsInLine);
+        sendMessage.setReplyMarkup(markupInline);
+
+        tryToExecuteMessage(sendMessage);
+    }
+
+    private String myDataCommandReceived(long chatId) {
+        User user = getUser(chatId);
+        return user.getUserName() + "\n"
+                + user.getFirstName() + "\n"
+                + user.getRegisteredTime() + "\n"
+                + user.getLocationCoordinates();
+    }
+
+    public void changeLanguageKeyboardDisplay(long chatId) {
         SendMessage sendMessage = new SendMessage();
         sendMessage.setChatId(String.valueOf(chatId));
         sendMessage.setText(messages.getString("choose_language"));
@@ -895,14 +945,15 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
 
-    private void modifyKeyboardSettings(ReplyKeyboardMarkup keyboardMarkup) {
+    public void modifyKeyboardSettings(ReplyKeyboardMarkup keyboardMarkup) {
         keyboardMarkup.setSelective(true);
         keyboardMarkup.setResizeKeyboard(true);
         keyboardMarkup.setOneTimeKeyboard(true);
     }
 
-    private void languageChange(Update update) {
+    public void languageChange(Update update) {
         long chatId = update.getMessage().getChatId();
+        User user = getUser(chatId);
         if (isUserMatchedByIdAndBotState(chatId, SHOW_LANGUAGES)) {
             String messageText = update.getMessage().getText();
 
@@ -915,17 +966,16 @@ public class TelegramBot extends TelegramLongPollingBot {
 
             sendMessage(update.getUpdateId(), messages.getString("swap_language"));
 
-            usersState.replace(chatId, DEFAULT_STATE);
+            user.setUserBotState(DEFAULT_STATE);
+            userRepository.save(user);
 
-            log.info("@" + update.getMessage().getChat().getUserName() + " changed language to "
-                    + messages.getString("language_name"));
         } else sendMessage(update.getUpdateId(), messages.
                 getString("non-existing_command"));
     }
 
-    private void registerUser(Message msg) {
+    public void registerUser(Message msg) {
         if (userRepository.findById(msg.getChatId()).isEmpty()) {
-            Long chatId = msg.getChatId();
+            long chatId = msg.getChatId();
             Chat chat = msg.getChat();
 
             User user = new User();
@@ -934,28 +984,22 @@ public class TelegramBot extends TelegramLongPollingBot {
             user.setFirstName(chat.getFirstName());
             user.setUserName(chat.getUserName());
             user.setRegisteredTime(new Timestamp(System.currentTimeMillis()));
-
+            user.setUserBotState(DEFAULT_STATE);
             userRepository.save(user);
             log.info("User saved: " + user);
         }
     }
 
-    private void startCommandReceived(long chatId, String firstName) {
+    public void startCommandReceived(long chatId, String firstName) {
+        User user = getUser(chatId);
         String greeting = messages.getString("greeting");
         String answer = EmojiParser.parseToUnicode(greeting + firstName + " :wave:");
-        usersState.putIfAbsent(chatId, DEFAULT_STATE);
-        for (Map.Entry<Long, BotStateEnum> entry : usersState.entrySet()) {
-            if (!userIdSet.contains(entry.getKey())) {
-                UserUnit userUnit = new UserUnit(entry.getKey());
-                userList.add(userUnit);
-                userIdSet.add(entry.getKey());
-            }
-        }
-        log.info("@" + firstName + " launched the bot.");
+        user.setUserBotState(DEFAULT_STATE);
+        userRepository.save(user);
         sendMessage(chatId, answer);
     }
 
-    private void sendMessage(long chatId, String textToSend) {
+    public void sendMessage(long chatId, String textToSend) {
         SendMessage sendMessage = new SendMessage();
         sendMessage.setChatId(String.valueOf(chatId));
         sendMessage.setText(textToSend);
@@ -986,14 +1030,19 @@ public class TelegramBot extends TelegramLongPollingBot {
         tryToExecuteMessage(sendMessage);
     }
 
-    private void executeTyping(long chatId) {
-        SendChatAction sendChatAction = new SendChatAction();
-        sendChatAction.setAction(ActionType.TYPING);
-        sendChatAction.setChatId(String.valueOf(chatId));
-        tryToExecuteMessage(sendChatAction);
+    public void executeBotTypingProcess(long chatId) {
+        try {
+            SendChatAction sendChatAction = new SendChatAction();
+            sendChatAction.setAction(ActionType.TYPING);
+            sendChatAction.setChatId(String.valueOf(chatId));
+            tryToExecuteMessage(sendChatAction);
+            Thread.sleep(500);
+        } catch (InterruptedException e) {
+            log.warn("Error occurred while creating pause between message sending: ", e);
+        }
     }
 
-    private void tryToExecuteMessage(BotApiMethod<?> message) {
+    public void tryToExecuteMessage(BotApiMethod<?> message) {
         try {
             execute(message);
         } catch (TelegramApiException e) {
@@ -1001,12 +1050,16 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
-    private boolean isUserMatchedByIdAndBotState(long chatId, BotStateEnum botState) {
-        for (Map.Entry<Long, BotStateEnum> entry : usersState.entrySet()) {
-            if (entry.getKey().equals(chatId) && entry.getValue().equals(botState)) {
-                return true;
+
+    @Scheduled(cron = "0 0 8 * * *")
+    public void sendScheduledMessages() {
+        var scheduleMessages = scheduleRepository.findAll();
+        Iterable<User> users = userRepository.findAll();
+
+        for (Schedule schedule : scheduleMessages) {
+            for (User user : users) {
+                sendMessage(user.getChatId(), schedule.getMessage());
             }
         }
-        return false;
     }
 }
