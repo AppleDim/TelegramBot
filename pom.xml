@@ -14,8 +14,8 @@
     <name>SpringBot</name>
     <description>Telegram bot on Spring Boot</description>
     <properties>
-        <maven.compiler.source>19</maven.compiler.source>
-        <maven.compiler.target>19</maven.compiler.target>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
         <telegram.version>5.6.0</telegram.version>
     </properties>
     <dependencies>
