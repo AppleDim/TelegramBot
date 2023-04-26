@@ -76,7 +76,7 @@
         <dependency>
             <groupId>org.jsoup</groupId>
             <artifactId>jsoup</artifactId>
-            <version>1.15.4</version>
+            <version>1.15.3</version>
         </dependency>
 
         <dependency>
@@ -95,7 +95,7 @@
                 <configuration>
                     <executable>true</executable>
                 </configuration>
-            </plugin><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><configuration><source>19</source><target>19</target></configuration></plugin>
+            </plugin><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><configuration><source>17</source><target>19</target></configuration></plugin>
         </plugins>
     </build>
 

@@ -1,6 +1,7 @@
 package dmitry.polyakov.service;
 
 import com.vdurmont.emoji.EmojiParser;
+import dmitry.polyakov.components.LanguageLocalisation;
 import dmitry.polyakov.components.Menu;
 import dmitry.polyakov.config.BotConfig;
 import dmitry.polyakov.constants.BotStateEnum;
@@ -41,7 +42,7 @@ import java.util.*;
 
 import static dmitry.polyakov.constants.BotMenuCommand.*;
 import static dmitry.polyakov.constants.BotStateEnum.*;
-import static dmitry.polyakov.service.LanguageLocalisation.messages;
+import static dmitry.polyakov.components.LanguageLocalisation.messages;
 
 /**
  * @author Dmitry Polyakov
@@ -78,26 +79,6 @@ public class TelegramBot extends TelegramLongPollingBot {
         return config.getToken();
     }
 
-    private boolean isUserMatchedByIdAndBotState(long chatId, BotStateEnum botState) {
-        User user = getUser(chatId);
-        return user.getUserBotState() == botState;
-    }
-
-    private Optional<User> findUser(long chatId) {
-        return userRepository.findById(chatId);
-    }
-
-    public User getUser(long chatId) {
-        Optional<User> optionalUser = findUser(chatId);
-        if (optionalUser.isPresent()) {
-            return optionalUser.get();
-        } else {
-            log.warn("User not found for chatId: " + chatId);
-            return null;
-        }
-    }
-
-
     @Override
     public void onUpdateReceived(Update update) {
         try {
@@ -119,133 +100,67 @@ public class TelegramBot extends TelegramLongPollingBot {
             User user = getUser(chatId);
 
             if (messageText.equals(START)) {
-                registerUser(update.getMessage());
-                startCommandReceived(chatId, update.getMessage().getChat().getUserName());
-                sendMessage(chatId, messages.getString("click_button"));
-                log.info(update.getMessage().getText() + " executed by @"
-                        + update.getMessage().getChat().getUserName());
+                handleStartCommand(update, chatId);
 
             } else if (messageText.equals(HELP)) {
-                sendMessage(chatId, messages.getString("help_text"));
-                log.info(update.getMessage().getText() + " executed by @"
-                        + update.getMessage().getChat().getUserName());
+                handleHelpCommand(update, chatId);
 
             } else if (messageText.equals(REGISTER)) {
-                confirmScheduledInfoReceipt(chatId);
-                log.info(update.getMessage().getText() + " executed by @"
-                        + update.getMessage().getChat().getUserName());
+                handleRegisterCommand(update, chatId);
+
+            } else if (messageText.equals(DELETE)) {
+                handleDeleteCommand(update, chatId);
 
             } else if (messageText.equals(LANGUAGE)) {
-                changeLanguageKeyboardDisplay(chatId);
-                user.setUserBotState(SHOW_LANGUAGES);
-                userRepository.save(user);
-                log.info(update.getMessage().getText() + "  executed by @"
-                        + update.getMessage().getChat().getUserName());
-
+                handleLanguageCommand(update, chatId, user);
+                
             } else if (messageText.equals(DICTIONARY)
                     || messageText.equals(EmojiParser.parseToUnicode(messages
                     .getString("dictionary") + ":gb:" + ":abc:" + ":ru:"))) {
-                user.setUserBotState(ASK_PHRASE);
-                userRepository.save(user);
-                sendMessage(chatId, messages.getString("enter_word"));
-                log.info(update.getMessage().getText() + "  executed by @"
-                        + update.getMessage().getChat().getUserName());
+                handleDictionaryCommand(update, chatId, user);
 
             } else if (messageText.equals(WEATHER)
                     || messageText.equals(EmojiParser.parseToUnicode(messages
                     .getString("weather_button") + ":thunder_cloud_rain:"))) {
-                if (user.getChatId() == chatId) {
-                    user.line = 0;
-                    user.page = 1;
-                }
-                displayWeatherMenu(chatId);
-                user.setUserBotState(SHOW_WEATHER_GETTER_WAY);
-                userRepository.save(user);
-                log.info(update.getMessage().getText() + " executed by @"
-                        + update.getMessage().getChat().getUserName());
+                handleWeatherCommand(update, chatId, user);
 
             } else if (messageText.equals(LanguageLocalisation.englishLang)
                     || messageText.equals(LanguageLocalisation.russianLang)) {
-                languageChange(update);
-                user.setUserBotState(DEFAULT_STATE);
-                userRepository.save(user);
-                log.info(update.getMessage().getText() + " executed by @"
-                        + update.getMessage().getChat().getUserName());
+                handleBotLanguageChange(update, user);
 
             } else if (messageText.equals(MY_DATA)) {
-                String info = myDataCommandReceived(chatId);
-                sendMessage(chatId, info);
-                log.info(update.getMessage().getText() + " executed by @"
-                        + update.getMessage().getChat().getUserName());
+                handleMyDataCommand(update, chatId);
 
             } else if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_GETTER_WAY)
                     && messageText.equals("1. Погода по местоположению")) {
-                if (userRepository.findById(chatId).isPresent()) {
-                    String coordinates = user.getLocationCoordinates();
-                    String[] cord = coordinates.split(", ");
-                    double longitude = Double.parseDouble(cord[0]);
-                    double latitude = Double.parseDouble(cord[1]);
-                    getWeatherFromLocation(chatId, longitude, latitude);
-                }
-                user.setUserBotState(DEFAULT_STATE);
-                userRepository.save(user);
-                log.info("User @" + update.getMessage().getChat().getUserName() + " sent his location");
+                handleWeatherFromStoredLocationRequest(update, chatId, user);
 
             } else if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_GETTER_WAY)
                     && messageText.equals("2. Список регионов")) {
-                user.setUserBotState(SHOW_REGION_LIST);
-                userRepository.save(user);
-                getRegion(chatId);
-                log.info(update.getMessage().getText() + " executed by @"
-                        + update.getMessage().getChat().getUserName());
+                handleWeatherFromSettlementRequest(update, chatId, user);
 
             } else if (isUserMatchedByIdAndBotState(chatId, ASK_PHRASE)) {
-                if (user.getChatId() == chatId) {
-                    user.words = update.getMessage().getText();
-                }
-                user.setUserBotState(ASK_DICTIONARY_OPTION);
-                userRepository.save(user);
-                displayDictionaryMenu(chatId);
+                handlePhraseRequest(update, chatId, user);
+
+            }  else if (messageText.equals(EmojiParser.parseToUnicode("1. Russian meanings" + ":clipboard:" + ":ru:"))
+                && isUserMatchedByIdAndBotState(chatId, ASK_DICTIONARY_OPTION)) {
+                handleRusMeaningsRequest(update, chatId, user);
 
             } else if (messageText.equals(EmojiParser.parseToUnicode("2. English meanings" + ":clipboard:" + ":gb:"))
                     && isUserMatchedByIdAndBotState(chatId, ASK_DICTIONARY_OPTION)) {
-                displayMeaningsOfWord(chatId);
-                if (user.getChatId() == chatId) {
-                    user.words = null;
-                }
-                user.setUserBotState(DEFAULT_STATE);
-                userRepository.save(user);
-                log.info(update.getMessage().getText() + " executed by @"
-                        + update.getMessage().getChat().getUserName());
+                handleEnglishMeaningsRequest(update, chatId, user);
 
             } else if (messageText.equals(EmojiParser.parseToUnicode("3. Russian-english sentences" + ":gb:" + ":ru:"))
                     && isUserMatchedByIdAndBotState(chatId, ASK_DICTIONARY_OPTION)) {
-                displayRusEngSentences(chatId);
-                if (user.getChatId() == chatId) {
-                    user.words = null;
-                }
-                user.setUserBotState(DEFAULT_STATE);
-                userRepository.save(user);
-                log.info(update.getMessage().getText() + " executed by @"
-                        + update.getMessage().getChat().getUserName());
+                handleRusEngSentencesRequest(update, chatId, user);
 
             } else if (messageText.equals(EmojiParser.parseToUnicode("4. English sentences" + ":abc:" + ":gb:"))
                     && isUserMatchedByIdAndBotState(chatId, ASK_DICTIONARY_OPTION)) {
-                displayExamplesWithSentences(chatId);
-                if (user.getChatId() == chatId) {
-                    user.words = null;
-                }
-                user.setUserBotState(DEFAULT_STATE);
-                userRepository.save(user);
-                log.info(update.getMessage().getText() + " executed by @"
-                        + update.getMessage().getChat().getUserName());
+                handleEngSentencesRequest(update, chatId, user);
 
             } else {
                 if (isUserMatchedByIdAndBotState(chatId, DEFAULT_STATE)) {
-                    sendMessage(chatId, messages.getString("non-existing_command"));
-                    log.info("User @" + update.getMessage().getChat().getUserName()
-                            + " tried to execute non-existing command "
-                            + update.getMessage().getText() + ". ");
+                    handleNoCommandFoundRequest(update, chatId);
                 }
             }
 
@@ -339,49 +254,63 @@ public class TelegramBot extends TelegramLongPollingBot {
             }
 
             if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) {
-                if (user.getChatId() == chatId) {
-                    for (Map.Entry<String, String> entry : user.regions.entrySet()) {
-                        if (entry.getKey().equals(callBackData)) {
-                            executeEditMessage(messageId, chatId, messages.getString("region_chosen") + " "
-                                    + callBackData);
-                            user.region = callBackData;
-                            user.setUserBotState(SHOW_SETTLEMENT_LIST);
-                            user.page = 1;
-                            user.line = 0;
-                            userRepository.save(user);
-                            break;
-                        }
-                    }
-                }
-                getSettlement(chatId);
+                saveRegionCallBackData(callBackData, messageId, chatId, user);
             }
 
             if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST)) {
-                if (user.getChatId() == chatId) {
-                    for (Map.Entry<String, String> entry : user.settlements.entrySet()) {
-                        if (entry.getKey().equals(callBackData)) {
-                            user.settlement = callBackData;
-                            executeEditMessage(messageId, chatId, messages.getString("settlement_chosen")
-                                    + callBackData);
-                            user.setUserBotState(SHOW_WEATHER_IN_SETTLEMENT);
-                            user.page = 1;
-                            user.line = 0;
-                            userRepository.save(user);
-                            break;
-                        }
-                    }
-                }
+                saveSettlementCallBackData(callBackData, messageId, chatId, user);
             }
 
             if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_IN_SETTLEMENT)) {
-                getWeatherFromSettlement(chatId);
-                log.info("@" + user.getUserName() + " received weather in "
-                        + user.settlement + " for day " + user.page);
+                getWeather(chatId, user);
             }
         }
     }
 
-    public void onUpdateLocationReceived(Update update) {
+    private void getWeather(long chatId, User user) {
+        getWeatherInSettlement(chatId);
+        if (user.page < 1) user.page = 1;
+        if (user.page > 10) user.page = 10;
+        log.info("@" + user.getUserName() + " received weather in "
+                + user.settlement + " for day " + user.page);
+    }
+
+    private void saveSettlementCallBackData(String callBackData, int messageId, long chatId, User user) {
+        if (user.getChatId() == chatId) {
+            for (Map.Entry<String, String> entry : user.settlements.entrySet()) {
+                if (entry.getKey().equals(callBackData)) {
+                    user.settlement = callBackData;
+                    executeEditMessage(messageId, chatId, messages.getString("settlement_chosen")
+                            + callBackData);
+                    user.setUserBotState(SHOW_WEATHER_IN_SETTLEMENT);
+                    user.page = 1;
+                    user.line = 0;
+                    userRepository.save(user);
+                    break;
+                }
+            }
+        }
+    }
+
+    private void saveRegionCallBackData(String callBackData, int messageId, long chatId, User user) {
+        if (user.getChatId() == chatId) {
+            for (Map.Entry<String, String> entry : user.regions.entrySet()) {
+                if (entry.getKey().equals(callBackData)) {
+                    executeEditMessage(messageId, chatId, messages.getString("region_chosen") + " "
+                            + callBackData);
+                    user.region = callBackData;
+                    user.setUserBotState(SHOW_SETTLEMENT_LIST);
+                    user.page = 1;
+                    user.line = 0;
+                    userRepository.save(user);
+                    break;
+                }
+            }
+        }
+        getSettlement(chatId);
+    }
+
+    private void onUpdateLocationReceived(Update update) {
         long chatId = update.getMessage().getChatId();
         User user = getUser(chatId);
         Location location = update.getMessage().getLocation();
@@ -396,6 +325,157 @@ public class TelegramBot extends TelegramLongPollingBot {
         user.setUserBotState(DEFAULT_STATE);
         userRepository.save(user);
         log.info("User @" + update.getMessage().getChat().getUserName() + " sent his location");
+    }
+
+    private void handleStartCommand(Update update, long chatId) {
+        registerUser(update.getMessage());
+        startCommandReceived(chatId, update.getMessage().getChat().getUserName());
+        sendMessage(chatId, messages.getString("click_button"));
+        log.info(update.getMessage().getText() + " executed by @"
+                + update.getMessage().getChat().getUserName());
+    }
+
+    private void handleHelpCommand(Update update, long chatId) {
+        sendMessage(chatId, messages.getString("help_text"));
+        log.info(update.getMessage().getText() + " executed by @"
+                + update.getMessage().getChat().getUserName());
+    }
+
+    private void handleRegisterCommand(Update update, long chatId) {
+        confirmScheduledInfoReceipt(chatId);
+        log.info(update.getMessage().getText() + " executed by @"
+                + update.getMessage().getChat().getUserName());
+    }
+
+    private void handleDeleteCommand(Update update, long chatId) {
+        deleteCommandReceived(chatId);
+        log.info( "User @" + update.getMessage().getChat().getUserName() + "has been deleted.");
+    }
+
+    private void handleLanguageCommand(Update update, long chatId, User user) {
+        changeLanguageKeyboardDisplay(chatId);
+        user.setUserBotState(SHOW_LANGUAGES);
+        userRepository.save(user);
+        log.info(update.getMessage().getText() + "  executed by @"
+                + update.getMessage().getChat().getUserName());
+    }
+
+    private void handleDictionaryCommand(Update update, long chatId, User user) {
+        user.setUserBotState(ASK_PHRASE);
+        userRepository.save(user);
+        SendMessage sendMessage = new SendMessage();
+        sendMessage.setChatId(String.valueOf(chatId));
+        sendMessage.setText(messages.getString("enter_word"));
+        tryToExecuteMessage(sendMessage);
+        log.info(update.getMessage().getText() + "  executed by @"
+                + update.getMessage().getChat().getUserName());
+    }
+
+    private void handleWeatherCommand(Update update, long chatId, User user) {
+        if (user.getChatId() == chatId) {
+            user.line = 0;
+            user.page = 1;
+        }
+        displayWeatherMenu(chatId);
+        user.setUserBotState(SHOW_WEATHER_GETTER_WAY);
+        userRepository.save(user);
+        log.info(update.getMessage().getText() + " executed by @"
+                + update.getMessage().getChat().getUserName());
+    }
+
+    private void handleBotLanguageChange(Update update, User user) {
+        languageChange(update);
+        user.setUserBotState(DEFAULT_STATE);
+        userRepository.save(user);
+        log.info(update.getMessage().getText() + " executed by @"
+                + update.getMessage().getChat().getUserName());
+    }
+
+    private void handleMyDataCommand(Update update, long chatId) {
+        String info = myDataCommandReceived(chatId);
+        sendMessage(chatId, info);
+        log.info(update.getMessage().getText() + " executed by @"
+                + update.getMessage().getChat().getUserName());
+    }
+
+    private void handleWeatherFromStoredLocationRequest(Update update, long chatId, User user) {
+        if (userRepository.findById(chatId).isPresent()) {
+            String coordinates = user.getLocationCoordinates();
+            String[] cord = coordinates.split(", ");
+            double longitude = Double.parseDouble(cord[0]);
+            double latitude = Double.parseDouble(cord[1]);
+            getWeatherFromLocation(chatId, longitude, latitude);
+        }
+        user.setUserBotState(DEFAULT_STATE);
+        userRepository.save(user);
+        log.info("User @" + update.getMessage().getChat().getUserName() + " sent his location");
+    }
+
+    private void handleWeatherFromSettlementRequest(Update update, long chatId, User user) {
+        user.setUserBotState(SHOW_REGION_LIST);
+        userRepository.save(user);
+        getRegion(chatId);
+        log.info(update.getMessage().getText() + " executed by @"
+                + update.getMessage().getChat().getUserName());
+    }
+
+    private void handlePhraseRequest(Update update, long chatId, User user) {
+        if (user.getChatId() == chatId) {
+            user.words = update.getMessage().getText();
+        }
+        user.setUserBotState(ASK_DICTIONARY_OPTION);
+        userRepository.save(user);
+        displayDictionaryMenu(chatId);
+    }
+
+    private void handleRusMeaningsRequest(Update update, long chatId, User user) {
+        displayRusWords(chatId);
+        if (user.getChatId() == chatId) {
+            user.words = null;
+        }
+        user.setUserBotState(DEFAULT_STATE);
+        userRepository.save(user);
+        log.info(update.getMessage().getText() + " executed by @"
+                + update.getMessage().getChat().getUserName());
+    }
+    private void handleEnglishMeaningsRequest(Update update, long chatId, User user) {
+        displayMeaningsOfWord(chatId);
+        if (user.getChatId() == chatId) {
+            user.words = null;
+        }
+        user.setUserBotState(DEFAULT_STATE);
+        userRepository.save(user);
+        log.info(update.getMessage().getText() + " executed by @"
+                + update.getMessage().getChat().getUserName());
+    }
+
+    private void handleRusEngSentencesRequest(Update update, long chatId, User user) {
+        displayRusEngSentences(chatId);
+        if (user.getChatId() == chatId) {
+            user.words = null;
+        }
+        user.setUserBotState(DEFAULT_STATE);
+        userRepository.save(user);
+        log.info(update.getMessage().getText() + " executed by @"
+                + update.getMessage().getChat().getUserName());
+    }
+
+    private void handleEngSentencesRequest(Update update, long chatId, User user) {
+        displayExamplesWithSentences(chatId);
+        if (user.getChatId() == chatId) {
+            user.words = null;
+        }
+        user.setUserBotState(DEFAULT_STATE);
+        userRepository.save(user);
+        log.info(update.getMessage().getText() + " executed by @"
+                + update.getMessage().getChat().getUserName());
+    }
+
+    private void handleNoCommandFoundRequest(Update update, long chatId) {
+        sendMessage(chatId, messages.getString("non-existing_command"));
+        log.info("User @" + update.getMessage().getChat().getUserName()
+                + " tried to execute non-existing command "
+                + update.getMessage().getText() + ". ");
     }
 
 
@@ -474,11 +554,33 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
+    public void displayRusWords(long chatId) {
+        User user = getUser(chatId);
+        if (user.getChatId() == chatId) {
+            try {
+                String url = "https://context.reverso.net/перевод/русский-английский/" + user.words;
+                Document doc = Jsoup.connect(url).get();
+                Elements elements = doc.body().getElementsByClass("display-term");
+                StringBuilder sb = new StringBuilder("Перевод слова: \n");
+                for (int i = 0; i < elements.size() - 1; i++) {
+                    sb.append(elements.get(i).text()).append(", ");
+                }
+                sendMessage(chatId, sb.append(elements.get(elements.size() - 1).text()).append(".").toString());
+            } catch (IOException e) {
+                sendMessage(chatId, "Word or phrase hasn't been found.");
+                user.words = null;
+                user.setUserBotState(DEFAULT_STATE);
+                userRepository.save(user);
+                log.warn("Error occurred while attempting this command: ", e);
+            }
+        }
+    }
+
     public void displayRusEngSentences(long chatId) {
         User user = getUser(chatId);
         if (user.getChatId() == chatId) {
             try {
-                String url = "https://context.reverso.net/перевод/английский-русский/" + user.words;
+                String url = "https://context.reverso.net/translation/english-russian/" + user.words;
                 Document doc = Jsoup.connect(url).get();
                 Elements elements = doc.body().getElementsByClass("example");
                 for (Element element : elements) {
@@ -602,20 +704,38 @@ public class TelegramBot extends TelegramLongPollingBot {
                     latitude, longitude).replace(",", ".");
             Document doc = Jsoup.connect(url).userAgent("Mozilla").ignoreContentType(true)
                     .ignoreHttpErrors(true).get();
-            sendMessage(chatId, doc.getElementById("main_title").text());
+            try {
+                sendMessage(chatId, Objects.requireNonNull(doc.getElementById("main_title")).text());
+            } catch(NullPointerException e) {
+                sendMessage(chatId, "Функция получения погоды по геолокации в данный момент не работает.");
+            }
             Elements elements = doc.body().getElementsByClass("a11y-hidden");
+            Elements elements1 = doc.getElementsByClass("term__value");
             StringBuilder sb = new StringBuilder();
+            int i = 0;
+            for (Element element : elements1) {
+                i++;
+                switch(i) {
+                    case 1 -> sb.append("Температура ").append(element.text()).append(" °C").append("\n");
+                    case 2 -> sb.append("Ощущается как ").append(element.text()).append(" °C").append("\n");
+                    case 3 -> sb.append("Скорость ветра ").append(element.text()).append("\n");
+                    case 4 -> sb.append("Влажность ").append(element.text()).append("\n");
+                    case 5 -> sb.append("Давление ").append(element.text()).append("\n");
+                }
+            }
+            int j = 0;
             for (Element element : elements) {
-                if (element.text().contains("В 0 часов")) break;
-                String str = element.text()
-                        .replace("В ", EmojiParser.parseToUnicode(":thermometer:"))
-                        .replace(" часа", ":00")
-                        .replace(" часов", ":00")
-                        .replace(" час", ":00");
-                sb.append(str).append("\n");
+                if (j < 1 || j > 4 && j < elements.size() - 3) {
+                    String str = element.text()
+                            .replace("В ", EmojiParser.parseToUnicode(":thermometer:"))
+                            .replace(" часа", ":00")
+                            .replace(" часов", ":00")
+                            .replace(" час", ":00");
+                    sb.append(str).append("\n");
+                }
+                j++;
             }
             sendMessage(chatId, sb.toString());
-            sendMessage(chatId, doc.body().getElementsByClass("sun-card__day-duration").text());
 
         } catch (IOException e) {
             log.warn("Error occurred while attempting this command: ", e);
@@ -686,6 +806,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                 markupInline.setKeyboard(rowsInline);
                 sendMessage.setReplyMarkup(markupInline);
                 tryToExecuteMessage(sendMessage);
+
                 userRepository.save(user);
             }
         }
@@ -726,6 +847,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                 markupInline.setKeyboard(rowsInline);
                 sendMessage.setReplyMarkup(markupInline);
                 tryToExecuteMessage(sendMessage);
+
                 userRepository.save(user);
             }
         }
@@ -761,7 +883,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         rowsInline.add(rowInLine);
     }
 
-    public void getWeatherFromSettlement(long chatId) {
+    public void getWeatherInSettlement(long chatId) {
         User user = getUser(chatId);
         if (user.getChatId() == chatId) {
             Document doc = extractCallbackDataUrlFromElements(user.settlements, user.settlement, chatId);
@@ -802,6 +924,7 @@ public class TelegramBot extends TelegramLongPollingBot {
             markupInline.setKeyboard(rowsInline);
             sendMessage.setReplyMarkup(markupInline);
             tryToExecuteMessage(sendMessage);
+
             userRepository.save(user);
         }
     }
@@ -990,13 +1113,21 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
+    public void deleteCommandReceived(long chatId) {
+       if (userRepository.findById(chatId).isPresent()) {
+           userRepository.deleteById(chatId);
+       }
+       sendMessage(chatId, "Вы успешно были удалены из базы данных.");
+    }
+
     public void startCommandReceived(long chatId, String firstName) {
         User user = getUser(chatId);
         String greeting = messages.getString("greeting");
         String answer = EmojiParser.parseToUnicode(greeting + firstName + " :wave:");
         user.setUserBotState(DEFAULT_STATE);
-        userRepository.save(user);
         sendMessage(chatId, answer);
+
+        userRepository.save(user);
     }
 
     public void sendMessage(long chatId, String textToSend) {
@@ -1047,6 +1178,25 @@ public class TelegramBot extends TelegramLongPollingBot {
             execute(message);
         } catch (TelegramApiException e) {
             log.warn("Error occurred while attempting this command: ", e);
+        }
+    }
+
+    private boolean isUserMatchedByIdAndBotState(long chatId, BotStateEnum botState) {
+        User user = getUser(chatId);
+        return user.getUserBotState() == botState;
+    }
+
+    private Optional<User> findUser(long chatId) {
+        return userRepository.findById(chatId);
+    }
+
+    public User getUser(long chatId) {
+        Optional<User> optionalUser = findUser(chatId);
+        if (optionalUser.isPresent()) {
+            return optionalUser.get();
+        } else {
+            log.warn("User not found: " + chatId);
+            return null;
         }
     }
 

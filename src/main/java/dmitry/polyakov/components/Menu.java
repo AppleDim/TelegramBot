@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static dmitry.polyakov.constants.BotMenuCommand.*;
-import static dmitry.polyakov.service.LanguageLocalisation.messages;
+import static dmitry.polyakov.components.LanguageLocalisation.messages;
 
 /**
  * @author Dmitry Polyakov

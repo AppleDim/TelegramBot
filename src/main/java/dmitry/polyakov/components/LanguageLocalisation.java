@@ -1,4 +1,4 @@
-package dmitry.polyakov.service;
+package dmitry.polyakov.components;
 
 import com.vdurmont.emoji.EmojiParser;
 
