@@ -1081,10 +1081,10 @@ public class TelegramBot extends TelegramLongPollingBot {
             String messageText = update.getMessage().getText();
 
             if (messageText.equals(LanguageLocalisation.englishLang)) {
-                messages = ResourceBundle.getBundle("messages", Locale.of("en"));
+                messages = ResourceBundle.getBundle("messages", new Locale("en"));
 
             } else if (messageText.equals(LanguageLocalisation.russianLang)) {
-                messages = ResourceBundle.getBundle("messages", Locale.of("ru"));
+                messages = ResourceBundle.getBundle("messages", new Locale("ru"));
             }
 
             sendMessage(update.getUpdateId(), messages.getString("swap_language"));
