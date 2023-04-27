@@ -35,29 +35,25 @@ public class User {
     @Column(name = "BotStates")
     private BotStateEnum userBotState;
 
-    public void setUserBotState(BotStateEnum userBotState) {
-        this.userBotState = userBotState;
-    }
+    @ElementCollection(fetch = FetchType.EAGER)
+    private Map<String, String> regions;
 
     @ElementCollection(fetch = FetchType.EAGER)
-    public Map<String, String> regions;
-
-    @ElementCollection(fetch = FetchType.EAGER)
-    public Map<String, String> settlements;
+    private Map<String, String> settlements;
 
     @ElementCollection
     @Column(name = "days", length = 2048)
-    public List<String> days;
+    private List<String> days;
 
-    public String words;
+    private String words;
 
-    public String region;
+    private String region;
 
-    public String settlement;
+    private String settlement;
 
-    public int line = 0;
+    private int line = 0;
 
-    public int page = 1;
+    private int page = 1;
 
     @Override
     public String toString() {

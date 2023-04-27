@@ -39,6 +39,7 @@ import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import java.io.IOException;
 import java.sql.Timestamp;
 import java.util.*;
+import java.util.stream.Collectors;
 
 import static dmitry.polyakov.constants.BotMenuCommand.*;
 import static dmitry.polyakov.constants.BotStateEnum.*;
@@ -54,6 +55,7 @@ public class TelegramBot extends TelegramLongPollingBot {
     private final BotConfig config;
     private UserRepository userRepository;
     private ScheduleRepository scheduleRepository;
+    private PhraseRepository phraseRepository;
 
     @Autowired
     public void setScheduleRepository(ScheduleRepository scheduleRepository) {
@@ -63,6 +65,11 @@ public class TelegramBot extends TelegramLongPollingBot {
     @Autowired
     public void setUserRepository(UserRepository userRepository) {
         this.userRepository = userRepository;
+    }
+
+    @Autowired
+    public void setPhraseRepository(PhraseRepository phraseRepository) {
+        this.phraseRepository = phraseRepository;
     }
 
     public TelegramBot(BotConfig config) {
@@ -113,7 +120,7 @@ public class TelegramBot extends TelegramLongPollingBot {
 
             } else if (messageText.equals(LANGUAGE)) {
                 handleLanguageCommand(update, chatId, user);
-                
+
             } else if (messageText.equals(DICTIONARY)
                     || messageText.equals(EmojiParser.parseToUnicode(messages
                     .getString("dictionary") + ":gb:" + ":abc:" + ":ru:"))) {
@@ -142,8 +149,8 @@ public class TelegramBot extends TelegramLongPollingBot {
             } else if (isUserMatchedByIdAndBotState(chatId, ASK_PHRASE)) {
                 handlePhraseRequest(update, chatId, user);
 
-            }  else if (messageText.equals(EmojiParser.parseToUnicode("1. Russian meanings" + ":clipboard:" + ":ru:"))
-                && isUserMatchedByIdAndBotState(chatId, ASK_DICTIONARY_OPTION)) {
+            } else if (messageText.equals(EmojiParser.parseToUnicode("1. Russian meanings" + ":clipboard:" + ":ru:"))
+                    && isUserMatchedByIdAndBotState(chatId, ASK_DICTIONARY_OPTION)) {
                 handleRusMeaningsRequest(update, chatId, user);
 
             } else if (messageText.equals(EmojiParser.parseToUnicode("2. English meanings" + ":clipboard:" + ":gb:"))
@@ -183,27 +190,29 @@ public class TelegramBot extends TelegramLongPollingBot {
 
                 case "BACK_BUTTON" -> {
                     if (user.getChatId() == chatId) {
-                        if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST) && user.line != 0) {
-                            user.line = user.line - 10;
+                        if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST) && user.getLine() != 0) {
+                            user.setLine(user.getLine() - 10);
                             deleteMessage(messageId, chatId);
-                            --user.page;
+                            int page = user.getPage();
+                            user.setPage(--page);
                             userRepository.save(user);
                             getRegion(chatId);
 
-                        } else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST) && user.line != 0) {
-                            user.line = user.line - 10;
-                            deleteMessage(messageId, chatId);
-                            --user.page;
+                        } else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST) && user.getLine() != 0) {
+                            user.setLine(user.getLine() - 10);
+                            int page = user.getPage();
+                            user.setPage(--page);
                             userRepository.save(user);
                             getSettlement(chatId);
 
-                        } else if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_IN_SETTLEMENT) && user.page > 0) {
+                        } else if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_IN_SETTLEMENT) && user.getPage() > 0) {
                             deleteMessage(messageId, chatId);
-                            --user.page;
+                            int page = user.getPage();
+                            user.setPage(--page);
                             userRepository.save(user);
 
                         } else {
-                            user.line = 0;
+                            user.setLine(0);
                             userRepository.save(user);
                             deleteMessage(messageId, chatId);
                             if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) getRegion(chatId);
@@ -223,24 +232,27 @@ public class TelegramBot extends TelegramLongPollingBot {
                 case "FORWARD_BUTTON" -> {
                     if (user.getChatId() == chatId) {
                         if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)
-                                && user.page < countLines(chatId) / 10 + 1) {
-                            user.line = user.line + 10;
+                                && user.getPage() < countLines(chatId) / 10 + 1) {
+                            user.setLine(user.getLine() + 10);
                             deleteMessage(messageId, chatId);
-                            ++user.page;
+                            int page = user.getPage();
+                            user.setPage(++page);
                             userRepository.save(user);
                             getRegion(chatId);
 
                         } else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST)
-                                && user.page < countLines(chatId) / 10 + 1) {
-                            user.line = user.line + 10;
+                                && user.getPage() < countLines(chatId) / 10 + 1) {
+                            user.setLine(user.getLine() + 10);
                             deleteMessage(messageId, chatId);
-                            ++user.page;
+                            int page = user.getPage();
+                            user.setPage(++page);
                             userRepository.save(user);
                             getSettlement(chatId);
 
-                        } else if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_IN_SETTLEMENT) && user.page <= 10) {
+                        } else if (isUserMatchedByIdAndBotState(chatId, SHOW_WEATHER_IN_SETTLEMENT) && user.getPage() <= 10) {
                             deleteMessage(messageId, chatId);
-                            ++user.page;
+                            int page = user.getPage();
+                            user.setPage(++page);
                             userRepository.save(user);
 
                         } else {
@@ -269,22 +281,22 @@ public class TelegramBot extends TelegramLongPollingBot {
 
     private void getWeather(long chatId, User user) {
         getWeatherInSettlement(chatId);
-        if (user.page < 1) user.page = 1;
-        if (user.page > 10) user.page = 10;
+        if (user.getPage() < 1) user.setPage(1);
+        if (user.getPage() > 10) user.setPage(10);
         log.info("@" + user.getUserName() + " received weather in "
-                + user.settlement + " for day " + user.page);
+                + user.getSettlement() + " for day " + user.getPage());
     }
 
     private void saveSettlementCallBackData(String callBackData, int messageId, long chatId, User user) {
         if (user.getChatId() == chatId) {
-            for (Map.Entry<String, String> entry : user.settlements.entrySet()) {
+            for (Map.Entry<String, String> entry : user.getSettlements().entrySet()) {
                 if (entry.getKey().equals(callBackData)) {
-                    user.settlement = callBackData;
+                    user.setSettlement(callBackData);
                     executeEditMessage(messageId, chatId, messages.getString("settlement_chosen")
                             + callBackData);
                     user.setUserBotState(SHOW_WEATHER_IN_SETTLEMENT);
-                    user.page = 1;
-                    user.line = 0;
+                    user.setPage(1);
+                    user.setLine(0);
                     userRepository.save(user);
                     break;
                 }
@@ -294,14 +306,14 @@ public class TelegramBot extends TelegramLongPollingBot {
 
     private void saveRegionCallBackData(String callBackData, int messageId, long chatId, User user) {
         if (user.getChatId() == chatId) {
-            for (Map.Entry<String, String> entry : user.regions.entrySet()) {
+            for (Map.Entry<String, String> entry : user.getRegions().entrySet()) {
                 if (entry.getKey().equals(callBackData)) {
                     executeEditMessage(messageId, chatId, messages.getString("region_chosen") + " "
                             + callBackData);
-                    user.region = callBackData;
+                    user.setRegion(callBackData);
                     user.setUserBotState(SHOW_SETTLEMENT_LIST);
-                    user.page = 1;
-                    user.line = 0;
+                    user.setPage(1);
+                    user.setLine(0);
                     userRepository.save(user);
                     break;
                 }
@@ -349,7 +361,7 @@ public class TelegramBot extends TelegramLongPollingBot {
 
     private void handleDeleteCommand(Update update, long chatId) {
         deleteCommandReceived(chatId);
-        log.info( "User @" + update.getMessage().getChat().getUserName() + "has been deleted.");
+        log.info("User @" + update.getMessage().getChat().getUserName() + "has been deleted.");
     }
 
     private void handleLanguageCommand(Update update, long chatId, User user) {
@@ -361,6 +373,7 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private void handleDictionaryCommand(Update update, long chatId, User user) {
+        displayPopularWords(chatId);
         user.setUserBotState(ASK_PHRASE);
         userRepository.save(user);
         SendMessage sendMessage = new SendMessage();
@@ -373,8 +386,8 @@ public class TelegramBot extends TelegramLongPollingBot {
 
     private void handleWeatherCommand(Update update, long chatId, User user) {
         if (user.getChatId() == chatId) {
-            user.line = 0;
-            user.page = 1;
+            user.setPage(1);
+            user.setLine(0);
         }
         displayWeatherMenu(chatId);
         user.setUserBotState(SHOW_WEATHER_GETTER_WAY);
@@ -419,29 +432,80 @@ public class TelegramBot extends TelegramLongPollingBot {
                 + update.getMessage().getChat().getUserName());
     }
 
+    private void displayPopularWords(long chatId) {
+        Iterable<Phrase> phrases = phraseRepository.findAll();
+        Map<String, Integer> wordsMap = new HashMap<>();
+        for (Phrase phrase : phrases) {
+            wordsMap.put(phrase.getPhrase(), phrase.getCount());
+        }
+        Map<String, Integer> sortedMap = wordsMap.entrySet().stream()
+                .sorted(Collections.reverseOrder(Map.Entry.comparingByValue()))
+                .limit(20)
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue,
+                        (oldValue, newValue) -> oldValue, LinkedHashMap::new));
+        StringBuilder stringBuilder = new StringBuilder();
+        stringBuilder.append("Популярные слова: ").append("\n");
+        int count = 1;
+        for (Map.Entry<String, Integer> entry : sortedMap.entrySet()) {
+            stringBuilder.append(count++)
+                    .append(". ")
+                    .append("`")
+                    .append(entry.getKey().substring(0, 1).toUpperCase())
+                    .append(entry.getKey().substring(1))
+                    .append("`")
+                    .append(": ")
+                    .append(entry.getValue())
+                    .append(" раз(а)")
+                    .append("\n");
+        }
+        sendMessage(chatId, stringBuilder.toString());
+    }
+
     private void handlePhraseRequest(Update update, long chatId, User user) {
         if (user.getChatId() == chatId) {
-            user.words = update.getMessage().getText();
+            user.setWords(update.getMessage().getText());
         }
         user.setUserBotState(ASK_DICTIONARY_OPTION);
+        updatePhraseRepository(user);
         userRepository.save(user);
         displayDictionaryMenu(chatId);
+    }
+
+    private void updatePhraseRepository(User user) {
+        Iterable<Phrase> phrases = phraseRepository.findAll();
+        boolean found = false;
+
+        for (Phrase phrase : phrases) {
+            if (phrase.getPhrase().equals(user.getWords())) {
+                phrase.setCount(phrase.getCount() + 1);
+                phraseRepository.save(phrase);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            Phrase newPhrase = new Phrase();
+            newPhrase.setPhrase(user.getWords());
+            newPhrase.setCount(1);
+            phraseRepository.save(newPhrase);
+        }
     }
 
     private void handleRusMeaningsRequest(Update update, long chatId, User user) {
         displayRusWords(chatId);
         if (user.getChatId() == chatId) {
-            user.words = null;
+            user.setWords(null);
         }
         user.setUserBotState(DEFAULT_STATE);
         userRepository.save(user);
         log.info(update.getMessage().getText() + " executed by @"
                 + update.getMessage().getChat().getUserName());
     }
+
     private void handleEnglishMeaningsRequest(Update update, long chatId, User user) {
         displayMeaningsOfWord(chatId);
         if (user.getChatId() == chatId) {
-            user.words = null;
+            user.setWords(null);
         }
         user.setUserBotState(DEFAULT_STATE);
         userRepository.save(user);
@@ -452,7 +516,7 @@ public class TelegramBot extends TelegramLongPollingBot {
     private void handleRusEngSentencesRequest(Update update, long chatId, User user) {
         displayRusEngSentences(chatId);
         if (user.getChatId() == chatId) {
-            user.words = null;
+            user.setWords(null);
         }
         user.setUserBotState(DEFAULT_STATE);
         userRepository.save(user);
@@ -463,7 +527,7 @@ public class TelegramBot extends TelegramLongPollingBot {
     private void handleEngSentencesRequest(Update update, long chatId, User user) {
         displayExamplesWithSentences(chatId);
         if (user.getChatId() == chatId) {
-            user.words = null;
+            user.setWords(null);
         }
         user.setUserBotState(DEFAULT_STATE);
         userRepository.save(user);
@@ -477,7 +541,6 @@ public class TelegramBot extends TelegramLongPollingBot {
                 + " tried to execute non-existing command "
                 + update.getMessage().getText() + ". ");
     }
-
 
     public void deleteMessage(int messageId, long chatId) {
         DeleteMessage deleteMessage = new DeleteMessage();
@@ -538,15 +601,20 @@ public class TelegramBot extends TelegramLongPollingBot {
         User user = getUser(chatId);
         if (user.getChatId() == chatId) {
             try {
-                Document doc = Jsoup.connect("https://dictionary.cambridge.org/dictionary/english/" + user.words).get();
-                Elements elements = doc.getElementsByClass("sense-body dsense_b");
+                Document doc = Jsoup.connect("https://dictionary.cambridge.org/dictionary/english/" + user.getWords()).get();
+                Elements elements = doc.getElementsByClass("ddef_h");
+                if (elements.size() == 0) {
+                    throw new IOException();
+                }
                 for (Element element : elements) {
-                    sendMessage(chatId, element.getElementsByClass("def ddef_d db")
-                            .text().replace(":", "\n"));
+                    sendMessage(chatId, !element.getElementsByClass("def-info ddef-info").hasText() ?
+                            (element.text().replace(":", "") + "\n") :
+                            (element.getElementsByClass("def-info ddef-info").text().replace(":", "") + "\n") +
+                                    element.getElementsByClass("def ddef_d db").text().replace(":", "") + "\n");
                 }
             } catch (IOException e) {
                 sendMessage(chatId, "Word or phrase hasn't been found.");
-                user.words = null;
+                user.setWords(null);
                 user.setUserBotState(DEFAULT_STATE);
                 userRepository.save(user);
                 log.warn("Error occurred while attempting this command: ", e);
@@ -558,7 +626,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         User user = getUser(chatId);
         if (user.getChatId() == chatId) {
             try {
-                String url = "https://context.reverso.net/перевод/русский-английский/" + user.words;
+                String url = "https://context.reverso.net/перевод/русский-английский/" + user.getWords();
                 Document doc = Jsoup.connect(url).get();
                 Elements elements = doc.body().getElementsByClass("display-term");
                 StringBuilder sb = new StringBuilder("Перевод слова: \n");
@@ -568,7 +636,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                 sendMessage(chatId, sb.append(elements.get(elements.size() - 1).text()).append(".").toString());
             } catch (IOException e) {
                 sendMessage(chatId, "Word or phrase hasn't been found.");
-                user.words = null;
+                user.setWords(null);
                 user.setUserBotState(DEFAULT_STATE);
                 userRepository.save(user);
                 log.warn("Error occurred while attempting this command: ", e);
@@ -580,7 +648,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         User user = getUser(chatId);
         if (user.getChatId() == chatId) {
             try {
-                String url = "https://context.reverso.net/translation/english-russian/" + user.words;
+                String url = "https://context.reverso.net/translation/english-russian/" + user.getWords();
                 Document doc = Jsoup.connect(url).get();
                 Elements elements = doc.body().getElementsByClass("example");
                 for (Element element : elements) {
@@ -589,7 +657,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                 }
             } catch (IOException e) {
                 sendMessage(chatId, "Word or phrase hasn't been found.");
-                user.words = null;
+                user.setWords(null);
                 user.setUserBotState(DEFAULT_STATE);
                 userRepository.save(user);
                 log.warn("Error occurred while attempting this command: ", e);
@@ -601,14 +669,14 @@ public class TelegramBot extends TelegramLongPollingBot {
         User user = getUser(chatId);
         if (user.getChatId() == chatId) {
             try {
-                Document doc = Jsoup.connect("https://dictionary.cambridge.org/dictionary/english/" + user.words).get();
+                Document doc = Jsoup.connect("https://dictionary.cambridge.org/dictionary/english/" + user.getWords()).get();
                 Elements elements3 = doc.body().getElementsByClass("lbb lb-cm lpt-10");
                 for (Element element : elements3) {
                     sendMessage(chatId, element.getElementsByClass("deg").text());
                 }
             } catch (IOException e) {
                 sendMessage(chatId, "Word or phrase hasn't been found.");
-                user.words = null;
+                user.setWords(null);
                 user.setUserBotState(DEFAULT_STATE);
                 userRepository.save(user);
                 log.warn("Error occurred while attempting this command: ", e);
@@ -706,7 +774,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                     .ignoreHttpErrors(true).get();
             try {
                 sendMessage(chatId, Objects.requireNonNull(doc.getElementById("main_title")).text());
-            } catch(NullPointerException e) {
+            } catch (NullPointerException e) {
                 sendMessage(chatId, "Функция получения погоды по геолокации в данный момент не работает.");
             }
             Elements elements = doc.body().getElementsByClass("a11y-hidden");
@@ -715,7 +783,7 @@ public class TelegramBot extends TelegramLongPollingBot {
             int i = 0;
             for (Element element : elements1) {
                 i++;
-                switch(i) {
+                switch (i) {
                     case 1 -> sb.append("Температура ").append(element.text()).append(" °C").append("\n");
                     case 2 -> sb.append("Ощущается как ").append(element.text()).append(" °C").append("\n");
                     case 3 -> sb.append("Скорость ветра ").append(element.text()).append("\n");
@@ -757,7 +825,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                 }
                 return numOfLines;
             } else if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST)) {
-                Document doc = extractCallbackDataUrlFromElements(user.regions, user.region, chatId);
+                Document doc = extractCallbackDataUrlFromElements(user.getRegions(), user.getRegion(), chatId);
                 Elements links = doc.select("a[href]");
                 for (Element element : links) {
                     if (element.attr("href").contains("/pogoda")
@@ -777,29 +845,29 @@ public class TelegramBot extends TelegramLongPollingBot {
         if (user.getChatId() == chatId) {
             SendMessage sendMessage = new SendMessage();
             sendMessage.setChatId(String.valueOf(chatId));
-            sendMessage.setText(messages.getString("region_list") + user.page + "/" + (countLines(chatId) / 10 + 1) + ": ");
+            sendMessage.setText(messages.getString("region_list") + user.getPage() + "/" + (countLines(chatId) / 10 + 1) + ": ");
 
             Document doc = connectToUrl("https://world-weather.ru/pogoda/russia", chatId);
             Elements links = doc.select("a[href]");
 
             if (isUserMatchedByIdAndBotState(chatId, SHOW_REGION_LIST)) {
-                user.regions = new TreeMap<>();
+                user.setRegions(new TreeMap<>());
                 InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
                 List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
                 int j = 0;
-                for (int i = user.line; j < 10; i++) {
+                for (int i = user.getLine(); j < 10; i++) {
                     try {
                         if (links.get(i).attr("href").contains("/pogoda")
                                 && !links.get(i).text().equals("Весь мир")) {
                             j++;
-                            user.regions.put(links.get(i).text(), links.get(i).attr("href"));
+                            user.getRegions().put(links.get(i).text(), links.get(i).attr("href"));
                         }
                     } catch (IndexOutOfBoundsException e) {
                         break;
                     }
                 }
                 int i = 0;
-                for (Map.Entry<String, String> regionEntry : user.regions.entrySet()) {
+                for (Map.Entry<String, String> regionEntry : user.getRegions().entrySet()) {
                     inlineKeyboardCreate(rowsInline, ++i, regionEntry.getKey());
                 }
                 putGeneralButtons(rowsInline);
@@ -816,31 +884,31 @@ public class TelegramBot extends TelegramLongPollingBot {
         User user = getUser(chatId);
         if (user.getChatId() == chatId) {
             if (isUserMatchedByIdAndBotState(chatId, SHOW_SETTLEMENT_LIST)) {
-                user.settlements = new TreeMap<>();
+                user.setSettlements(new TreeMap<>());
                 SendMessage sendMessage = new SendMessage();
                 sendMessage.setChatId(String.valueOf(chatId));
-                sendMessage.setText(messages.getString("settlement_list") + user.page + "/" + (countLines(chatId) / 10 + 1) + ": ");
-                Document doc = extractCallbackDataUrlFromElements(user.regions, user.region, chatId);
+                sendMessage.setText(messages.getString("settlement_list") + user.getPage() + "/" + (countLines(chatId) / 10 + 1) + ": ");
+                Document doc = extractCallbackDataUrlFromElements(user.getRegions(), user.getRegion(), chatId);
 
                 Elements links = doc.select("a[href]");
                 InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
                 List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
 
                 int j = 0;
-                for (int i = user.line; j < 10; i++) {
+                for (int i = user.getLine(); j < 10; i++) {
                     try {
                         if (links.get(i).attr("href").contains("/pogoda")
                                 && !links.get(i).text().equals("Весь мир")
                                 && !links.get(i).text().equals("Россия")) {
                             j++;
-                            user.settlements.put(links.get(i).text(), "http:" + links.get(i).attr("href") + "10days");
+                            user.getSettlements().put(links.get(i).text(), "http:" + links.get(i).attr("href") + "10days");
                         }
                     } catch (IndexOutOfBoundsException e) {
                         break;
                     }
                 }
                 int i = 0;
-                for (Map.Entry<String, String> settlementEntry : user.settlements.entrySet()) {
+                for (Map.Entry<String, String> settlementEntry : user.getSettlements().entrySet()) {
                     inlineKeyboardCreate(rowsInline, ++i, settlementEntry.getKey());
                 }
                 putGeneralButtons(rowsInline);
@@ -886,7 +954,7 @@ public class TelegramBot extends TelegramLongPollingBot {
     public void getWeatherInSettlement(long chatId) {
         User user = getUser(chatId);
         if (user.getChatId() == chatId) {
-            Document doc = extractCallbackDataUrlFromElements(user.settlements, user.settlement, chatId);
+            Document doc = extractCallbackDataUrlFromElements(user.getSettlements(), user.getSettlement(), chatId);
             Elements elements = doc.body().getElementsByClass("weather-short");
             Elements sunRisesElems = doc.body().getElementsByClass("sun-box");
             String elements1 = doc.getElementsByClass("weather-temperature").outerHtml();
@@ -898,9 +966,9 @@ public class TelegramBot extends TelegramLongPollingBot {
             int m = 0;
             SendMessage sendMessage = new SendMessage();
             sendMessage.setChatId(String.valueOf(chatId));
-            user.days = new ArrayList<>();
+            user.setDays(new ArrayList<>());
             for (Element element : elements) {
-                user.days.add(EmojiParser.parseToUnicode(":calendar:")
+                user.getDays().add(EmojiParser.parseToUnicode(":calendar:")
                         + (element.getElementsByClass("dates short-d").hasText()
                         ? ("*" + element.getElementsByClass("dates short-d").text() + "*" + " \n")
                         : ("*" + element.getElementsByClass("dates short-d red").text()) + "*" + " \n")
@@ -915,9 +983,9 @@ public class TelegramBot extends TelegramLongPollingBot {
                         + " Закат: " + sunRisesElems.get(i++).text().split(" ")[1]);
             }
             sendMessage.setParseMode(ParseMode.MARKDOWN);
-            if (user.page < 1) user.page = 1;
-            if (user.page > 10) user.page = 10;
-            sendMessage.setText(user.days.get(user.page - 1));
+            if (user.getPage() < 1) user.setPage(1);
+            if (user.getPage() > 10) user.setPage(10);
+            sendMessage.setText(user.getDays().get(user.getPage() - 1));
             InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
             List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
             putGeneralButtons(rowsInline);
@@ -1081,10 +1149,10 @@ public class TelegramBot extends TelegramLongPollingBot {
             String messageText = update.getMessage().getText();
 
             if (messageText.equals(LanguageLocalisation.englishLang)) {
-                messages = ResourceBundle.getBundle("messages", new Locale("en"));
+                messages = ResourceBundle.getBundle("messages", Locale.of("en"));
 
             } else if (messageText.equals(LanguageLocalisation.russianLang)) {
-                messages = ResourceBundle.getBundle("messages", new Locale("ru"));
+                messages = ResourceBundle.getBundle("messages", Locale.of("ru"));
             }
 
             sendMessage(update.getUpdateId(), messages.getString("swap_language"));
@@ -1114,10 +1182,10 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     public void deleteCommandReceived(long chatId) {
-       if (userRepository.findById(chatId).isPresent()) {
-           userRepository.deleteById(chatId);
-       }
-       sendMessage(chatId, "Вы успешно были удалены из базы данных.");
+        if (userRepository.findById(chatId).isPresent()) {
+            userRepository.deleteById(chatId);
+        }
+        sendMessage(chatId, "Вы успешно были удалены из базы данных.");
     }
 
     public void startCommandReceived(long chatId, String firstName) {
